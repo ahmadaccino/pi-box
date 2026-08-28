@@ -11,8 +11,6 @@
   --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
 }
 
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
-
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
