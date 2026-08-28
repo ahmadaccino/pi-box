@@ -3,9 +3,7 @@
  * Pi HTTP/SSE sidecar. Skills are a first-class primitive on this box.
  */
 import http from "node:http";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { loadSkills, annotateAvailability, toPiSkills, publicSkill } from "./skills.mjs";
 import { detectCapabilities } from "./host.mjs";
 
@@ -295,6 +293,3 @@ refreshCatalog()
 server.listen(PORT, HOST, () => {
   console.log(`[pi-box] agent listening on http://${HOST}:${PORT}`);
 });
-
-void path;
-void fileURLToPath;
