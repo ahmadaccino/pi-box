@@ -10,23 +10,43 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="shell">
-      <header>
-        <div class="brand">
-          <span class="mark" aria-hidden="true"></span>
-          <div>
-            <strong>pi-box</strong>
-            <span class="sub">pi harness · your container</span>
-          </div>
-        </div>
-        <div class="status" id="status">idle</div>
-      </header>
-      <main id="log"></main>
-      <form id="composer">
-        <textarea id="input" rows="1" placeholder="Ask pi-box…" autofocus></textarea>
-        <button type="submit" id="send">Send</button>
-      </form>
+    <div id="gate" hidden>
+      <div class="gate-card">
+        <span class="mark"></span>
+        <h1>pi-box</h1>
+        <p>Sign in to message your boxes.</p>
+        <button type="button" id="signin">Sign in</button>
+      </div>
     </div>
+    <div id="app" class="app" hidden>
+      <aside>
+        <div class="aside-head">
+          <div class="brand">
+            <span class="mark"></span>
+            <strong>pi-box</strong>
+          </div>
+          <button type="button" id="userbtn" class="ghost" title="Account">you</button>
+        </div>
+        <p class="aside-label">boxes</p>
+        <nav id="roster"></nav>
+        <div id="skill-list" class="skill-list"></div>
+      </aside>
+      <section class="thread">
+        <header>
+          <div>
+            <strong id="box-name">select a box</strong>
+            <span class="sub" id="box-meta"></span>
+          </div>
+          <div class="status" id="status">idle</div>
+        </header>
+        <main id="log"></main>
+        <form id="composer">
+          <textarea id="input" rows="1" placeholder="Message this box…"></textarea>
+          <button type="submit" id="send">Send</button>
+        </form>
+      </section>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

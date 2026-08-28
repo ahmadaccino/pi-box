@@ -1,75 +1,65 @@
 # pi-box
 
-Open-source personal agent. Grok Bot-shaped UI later. **Pi** as the harness. Runs in **your** container. Default host is Cloudflare Containers.
+Open-source personal agent. Grok Bot-shaped *information architecture* (roster of boxes, one thread, tool cards). **Pi** is the harness. Skills are a first-class primitive.
 
 Not a Grok Bot clone. Not an OpenClaw fork. Not a Rakazo fork.
 
-## What this slice is
+## Skills primitive
 
-- Chat UI with streaming text and tool cards
-- Pi sidecar (`createAgentSession`) over HTTP SSE
-- Dockerfile so the same sidecar runs on Cloudflare Containers or any Docker host
-- One example skill (`hello-workspace`)
-- Mock mode if you have no model API key, so the UI is still demoable
+Every pi-box **indexes** `SKILL.md` files, **lists** them on the box, and **injects live ones into Pi**. A skill that needs a browser / Android / iOS simulator stays in the catalog but is marked unavailable until that host can actually do it.
 
-What it is not yet: desktop/mobile apps, MCP, Telegram, a plugin marketplace, multi-user auth.
+| Endpoint | What |
+| --- | --- |
+| `GET /api/skills` | Catalog for this box (`available`, `requires`, `missing`) |
+| `GET /api/boxes` | Boxes you can message, each with skills + capabilities |
+| `POST /api/chat` | Talk to a box (`session` / `boxId`) |
 
-## Architecture
+Pi only receives skills where `available: true` (progressive disclosure, [Agent Skills](https://agentskills.io/specification)).
 
-```
-web UI  →  Worker (Cloudflare) or scripts/dev.mjs (local)
-                →  Pi container :8788  (read / write / edit / bash)
-```
+Drop a folder with `SKILL.md` in `container/skills/` or ship an [Agent Plugin](https://agent-plugins.org/specification) under `plugins/<name>/` (`plugin.json` + `skills/`).
 
-Pi never runs in a Worker isolate. The Worker is the door.
+Shipped packs:
 
-## Local (no Cloudflare)
+- **browser** — Playwright/Chromium on a machine box, or Cloudflare Browser Rendering on a cloud box
+- **android-device** — adb / Argent. Not a Cloudflare container.
+- **ios-simulator** — Mac + Xcode (or Argent). Linux and Cloudflare will never boot a simulator.
+
+## Talk to your boxes
+
+Web UI: left roster of pi-boxes, thread on the right. Clerk if `CLERK_SECRET_KEY` is set; local mock skips auth.
+
+## Local
 
 ```bash
 cd container && npm install --ignore-scripts && cd ..
 npm install
-cp .dev.vars.example .dev.vars   # optional keys
-# export ANTHROPIC_API_KEY=sk-ant-...
+cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-Open http://127.0.0.1:8787
+http://127.0.0.1:8787
 
-Without a provider key you get **mock mode**: a fake `ls` tool card and a short reply. With a key, Pi actually runs.
+No provider key → mock mode, still lists skills. `export ANTHROPIC_API_KEY=…` for a real Pi loop.
 
-## Cloudflare deploy
+## Clerk
 
-Workers Paid is required (Containers). Docker must be running for `wrangler deploy`.
+```bash
+# .dev.vars / wrangler secrets
+CLERK_PUBLISHABLE_KEY=pk_...
+CLERK_SECRET_KEY=sk_...
+npx wrangler secret put CLERK_SECRET_KEY
+```
+
+Also set `CLERK_PUBLISHABLE_KEY` in `wrangler.jsonc` `vars` (it is public).
+
+## Cloudflare
+
+Workers Paid + Docker. First request 1–2 minutes cold start.
 
 ```bash
 npx wrangler secret put ANTHROPIC_API_KEY
-# optional:
-# npx wrangler secret put OPENAI_API_KEY
-# npx wrangler secret put XAI_API_KEY
-# npx wrangler secret put GATEWAY_TOKEN
 npx wrangler deploy
 ```
-
-First request can take 1–2 minutes while the container starts. The Worker passes provider secrets into the container as env vars.
-
-Cold start / cost: `sleepAfter` is 10 minutes. Always-on `standard-1` is on the order of tens of dollars a month if you never let it sleep. See [Cloudflare Containers pricing](https://developers.cloudflare.com/containers/pricing/).
-
-## Skills
-
-Pi loads [Agent Skills](https://agentskills.io/specification) (`SKILL.md`). Drop more under `container/skills/<name>/SKILL.md` (image) or `~/.pi/agent/skills/` (runtime).
-
-MCP is intentionally not in Pi. A later plugin can add it. Portable install unit later: [Agent Plugins 1.0](https://agent-plugins.org/specification) (`plugin.json` + `skills/` + optional `mcp.json`).
-
-## Stack
-
-| Piece | Choice |
-| --- | --- |
-| Harness | [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) |
-| Container API | [`@cloudflare/containers`](https://developers.cloudflare.com/containers/) |
-| Edge | Cloudflare Worker + assets |
-| Local | `scripts/dev.mjs` |
-
-Prior art for the *deploy* shape: [Moltworker](https://github.com/cloudflare/moltworker). Closest *product IA* to study, not fork: [Rakazo](https://github.com/elie222/rakazo).
 
 ## License
 

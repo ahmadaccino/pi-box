@@ -13,6 +13,16 @@ const publicDir = path.join(root, "public");
 const UI_PORT = Number(process.env.UI_PORT || 8787);
 const AGENT_PORT = Number(process.env.PORT || 8788);
 
+try {
+  const raw = await readFile(path.join(root, ".dev.vars"), "utf8");
+  for (const line of raw.split("\n")) {
+    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (m && process.env[m[1]] == null) process.env[m[1]] = m[2];
+  }
+} catch {
+  /* no .dev.vars */
+}
+
 const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -29,6 +39,7 @@ const agent = spawn(process.execPath, ["server.mjs"], {
     HOST: "127.0.0.1",
     PI_CWD: process.env.PI_CWD || path.join(root, "workspace"),
     PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || path.join(root, ".pi-agent"),
+    PI_PLUGINS_DIR: process.env.PI_PLUGINS_DIR || path.join(root, "plugins"),
   },
   stdio: "inherit",
 });
