@@ -1,0 +1,20 @@
+{
+  "name": "pi-box",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Open-source Grok Bot-shaped personal agent. Pi harness, any container, Cloudflare deploy.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:agent": "node container/server.mjs",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.0.30"
+  },
+  "devDependencies": {
+    "wrangler": "^4.28.0"
+  }
+}

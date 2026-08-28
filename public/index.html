@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pi-box</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          <div>
+            <strong>pi-box</strong>
+            <span class="sub">pi harness · your container</span>
+          </div>
+        </div>
+        <div class="status" id="status">idle</div>
+      </header>
+      <main id="log"></main>
+      <form id="composer">
+        <textarea id="input" rows="1" placeholder="Ask pi-box…" autofocus></textarea>
+        <button type="submit" id="send">Send</button>
+      </form>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
