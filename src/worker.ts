@@ -13,6 +13,7 @@ export class PiBox extends Container {
     CLOUDFLARE_BROWSER: env.BROWSER ? "1" : "",
     PI_BOX_ID: "cloud",
     PI_BOX_NAME: "cloudflare",
+    VAULT_ENCRYPTION_KEY: env.VAULT_ENCRYPTION_KEY ?? "",
   };
 }
 
@@ -25,6 +26,7 @@ type Env = {
   GATEWAY_TOKEN?: string;
   CLERK_PUBLISHABLE_KEY?: string;
   CLERK_SECRET_KEY?: string;
+  VAULT_ENCRYPTION_KEY?: string;
   BROWSER?: unknown;
 };
 
@@ -79,6 +81,12 @@ export default {
         "cloud";
       const container = getContainer(workerEnv.PI_BOX, session);
       return container.fetch(request);
+    }
+
+    if (url.pathname === "/vault") {
+      return workerEnv.ASSETS.fetch(
+        new Request(new URL("/vault.html" + url.search, request.url), request),
+      );
     }
 
     return workerEnv.ASSETS.fetch(request);
