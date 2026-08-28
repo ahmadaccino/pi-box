@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pi-box vault</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      body { display: grid; place-items: start center; padding: 48px 16px 80px; }
+      .vault-card { width: min(440px, 100%); background: var(--paper); border: 1px solid var(--line); padding: 28px 28px 32px; }
+      .vault-card h1 { margin: 12px 0 4px; font-size: 22px; }
+      .lede { color: var(--mute); margin: 0 0 22px; }
+      label { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); margin: 14px 0 6px; }
+      input, select { width: 100%; background: transparent; color: var(--ink); border: 1px solid var(--line); padding: 10px 12px; font: inherit; outline: none; }
+      input:focus, select:focus { border-color: var(--amber); }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .actions { margin-top: 22px; display: flex; gap: 10px; align-items: center; }
+      .hint { color: var(--mute); font-size: 13px; }
+      .ok { color: var(--ok); }
+      .bad { color: var(--bad); }
+      .hidden { display: none; }
+      #done { margin: 18px 0 0; }
+    </style>
+  </head>
+  <body>
+    <div class="vault-card">
+      <span class="mark"></span>
+      <h1>vault</h1>
+      <p class="lede">Secrets stay on this box. They are never shown to the model.</p>
+      <form id="form">
+        <input type="hidden" name="token" id="token" />
+        <label for="kind">Kind</label>
+        <select id="kind" name="kind">
+          <option value="login">Login</option>
+          <option value="payment">Payment</option>
+          <option value="address">Address</option>
+          <option value="contact">Contact</option>
+        </select>
+        <label for="label">Label</label>
+        <input id="label" name="label" maxlength="128" placeholder="Work Gmail, card ending 4242" />
+
+        <div id="panel-login">
+          <label for="identifierType">Identifier type</label>
+          <select id="identifierType" name="identifierType">
+            <option value="email">Email</option>
+            <option value="username">Username</option>
+            <option value="phone">Phone</option>
+          </select>
+          <label for="origin">Origin</label>
+          <input id="origin" name="origin" placeholder="https://example.com" autocomplete="url" />
+          <label for="identifier">Identifier</label>
+          <input id="identifier" name="identifier" autocomplete="username" />
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" />
+        </div>
+
+        <div id="panel-payment" class="hidden">
+          <label for="cardholder">Name on card</label>
+          <input id="cardholder" name="cardholder" autocomplete="cc-name" />
+          <label for="cardNumber">Card number</label>
+          <input id="cardNumber" name="cardNumber" inputmode="numeric" autocomplete="cc-number" />
+          <div class="row">
+            <div>
+              <label for="expMonth">Exp month</label>
+              <input id="expMonth" name="expMonth" inputmode="numeric" placeholder="MM" autocomplete="cc-exp-month" />
+            </div>
+            <div>
+              <label for="expYear">Exp year</label>
+              <input id="expYear" name="expYear" inputmode="numeric" placeholder="YYYY" autocomplete="cc-exp-year" />
+            </div>
+          </div>
+          <label for="cvc">CVC</label>
+          <input id="cvc" name="cvc" inputmode="numeric" autocomplete="cc-csc" />
+        </div>
+
+        <div id="panel-address" class="hidden">
+          <label for="line1">Line 1</label>
+          <input id="line1" name="line1" autocomplete="address-line1" />
+          <label for="line2">Line 2</label>
+          <input id="line2" name="line2" autocomplete="address-line2" />
+          <div class="row">
+            <div>
+              <label for="city">City</label>
+              <input id="city" name="city" autocomplete="address-level2" />
+            </div>
+            <div>
+              <label for="region">Region</label>
+              <input id="region" name="region" autocomplete="address-level1" />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label for="postalCode">Postal code</label>
+              <input id="postalCode" name="postalCode" autocomplete="postal-code" />
+            </div>
+            <div>
+              <label for="country">Country</label>
+              <input id="country" name="country" autocomplete="country-name" />
+            </div>
+          </div>
+        </div>
+
+        <div id="panel-contact" class="hidden">
+          <label for="name">Name</label>
+          <input id="name" name="name" autocomplete="name" />
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="email" />
+          <label for="phone">Phone</label>
+          <input id="phone" name="phone" type="tel" autocomplete="tel" />
+        </div>
+
+        <div class="actions">
+          <button type="submit" id="save">Save</button>
+          <span class="hint" id="status"></span>
+        </div>
+      </form>
+      <p id="done" class="ok hidden">saved, you can close this.</p>
+    </div>
+    <script src="/vault.js"></script>
+  </body>
+</html>
