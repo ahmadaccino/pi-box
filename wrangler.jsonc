@@ -14,9 +14,9 @@
   "containers": [
     {
       "class_name": "PiBox",
-      "image": "./container/Dockerfile",
+      "image": "./Dockerfile",
       "instance_type": "standard-1",
-      "max_instances": 1
+      "max_instances": 2
     }
   ],
   "durable_objects": {
@@ -26,5 +26,8 @@
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PiBox"] }
-  ]
+  ],
+  "vars": {
+    "CLERK_PUBLISHABLE_KEY": ""
+  }
 }

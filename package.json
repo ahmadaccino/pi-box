@@ -12,6 +12,7 @@
     "types": "wrangler types"
   },
   "dependencies": {
+    "@clerk/backend": "^2.14.0",
     "@cloudflare/containers": "^0.0.30"
   },
   "devDependencies": {
