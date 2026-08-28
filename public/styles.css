@@ -110,7 +110,7 @@ aside {
 
 .thread {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto auto 1fr auto;
   min-width: 0;
   background: var(--paper);
 }
@@ -226,3 +226,23 @@ button:disabled { opacity: 0.4; cursor: default; }
   .app { grid-template-columns: 1fr; }
   aside { display: none; }
 }
+
+#computer-pane {
+  max-height: 280px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+}
+#computer-pane[hidden] { display: none !important; }
+.aside-foot {
+  padding: 10px 12px 14px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.aside-foot a {
+  color: var(--mute);
+  text-decoration: none;
+}
+.aside-foot a:hover { color: var(--amber); }

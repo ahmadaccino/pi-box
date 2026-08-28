@@ -21,8 +21,15 @@ Drop a folder with `SKILL.md` in `container/skills/` or ship an [Agent Plugin](h
 Shipped packs:
 
 - **browser** — Playwright/Chromium on a machine box, or Cloudflare Browser Rendering on a cloud box
+- **vault** — encrypted logins, cards, addresses, contacts. Secrets stay on the box.
 - **android-device** — adb / Argent. Not a Cloudflare container.
 - **ios-simulator** — Mac + Xcode (or Argent). Linux and Cloudflare will never boot a simulator.
+
+## Vault and browser
+
+Open `/vault` to enter passwords and cards; the model only sees opaque handles. Details: [docs/vault.md](docs/vault.md).
+
+Real browser sessions (Playwright locally, Cloudflare Browser Rendering in the cloud) expose a live computer pane when the box has `browser`. Details: [docs/browser.md](docs/browser.md).
 
 ## Talk to your boxes
 

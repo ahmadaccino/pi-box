@@ -15,6 +15,73 @@ const signin = document.getElementById("signin");
 let clerk = null;
 let boxes = [];
 let current = null;
+let computerSessionId = null;
+let computerTimer = null;
+
+function computerPane() {
+  return document.getElementById("computer-pane");
+}
+
+function stopComputer() {
+  if (computerTimer) {
+    clearInterval(computerTimer);
+    computerTimer = null;
+  }
+  const pane = computerPane();
+  if (pane && typeof pane._piComputerStop === "function") {
+    pane._piComputerStop();
+    pane._piComputerStop = null;
+  }
+}
+
+function showIdleComputer(pane) {
+  if (!pane) return;
+  pane.className = "pi-computer";
+  pane.innerHTML = "";
+  const bar = el("div", "pi-computer-bar", "browser idle");
+  pane.append(bar);
+}
+
+async function syncComputer(box) {
+  const pane = computerPane();
+  if (!pane || !window.PiBoxComputer) return;
+  const on = Boolean(box?.capabilities?.browser);
+  if (!on) {
+    stopComputer();
+    pane.hidden = true;
+    pane.innerHTML = "";
+    computerSessionId = null;
+    return;
+  }
+  pane.hidden = false;
+  let sid = null;
+  let takeover = false;
+  try {
+    const data = await PiBoxComputer.listBrowsers({ headers: await authHeader() });
+    const session = (data.sessions || [])[0];
+    if (session?.id) {
+      sid = session.id;
+      takeover = Boolean(session.takeover);
+    }
+  } catch {
+    sid = null;
+  }
+  if (sid && sid !== computerSessionId) {
+    computerSessionId = sid;
+    PiBoxComputer.renderComputerPane(pane, sid, { takeover });
+  } else if (!sid) {
+    computerSessionId = null;
+    showIdleComputer(pane);
+  }
+}
+
+function startComputer(box) {
+  stopComputer();
+  syncComputer(box);
+  if (box?.capabilities?.browser) {
+    computerTimer = setInterval(() => syncComputer(box), 3000);
+  }
+}
 
 async function authHeader() {
   if (!clerk?.session) return {};
@@ -78,6 +145,7 @@ function selectBox(id) {
   boxMeta.textContent = capsLine(current);
   renderRoster();
   renderSkills(current);
+  startComputer(current);
   log.innerHTML = "";
   input.focus();
 }

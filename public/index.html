@@ -30,6 +30,9 @@
         <p class="aside-label">boxes</p>
         <nav id="roster"></nav>
         <div id="skill-list" class="skill-list"></div>
+        <footer class="aside-foot">
+          <a href="/vault">vault</a>
+        </footer>
       </aside>
       <section class="thread">
         <header>
@@ -39,6 +42,7 @@
           </div>
           <div class="status" id="status">idle</div>
         </header>
+        <div id="computer-pane" hidden></div>
         <main id="log"></main>
         <form id="composer">
           <textarea id="input" rows="1" placeholder="Message this box…"></textarea>
@@ -47,6 +51,7 @@
       </section>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"></script>
+    <script src="/computer.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>
