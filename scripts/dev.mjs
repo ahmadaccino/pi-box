@@ -97,6 +97,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   let rel = url.pathname === "/" ? "/index.html" : url.pathname;
+  if (rel === "/vault") rel = "/vault.html";
   const filePath = path.normalize(path.join(publicDir, rel));
   if (!filePath.startsWith(publicDir)) {
     res.writeHead(403);
