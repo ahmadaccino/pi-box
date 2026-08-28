@@ -28,6 +28,7 @@ function requiresFrom(fm) {
   const blob = `${fm.compatibility || ""} ${fm.metadata || ""} ${fm.name || ""} ${fm.description || ""}`.toLowerCase();
   const requires = [];
   if (/\bbrowser\b|playwright|chromium|cdp/.test(blob)) requires.push("browser");
+  if (/\bvault\b/.test(blob)) requires.push("vault");
   if (/\bandroid\b|\badb\b|emulator/.test(blob)) requires.push("android");
   if (/\bios\b|simulator|xcode|simctl/.test(blob)) requires.push("ios");
   return [...new Set(requires)];

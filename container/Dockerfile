@@ -8,7 +8,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --ignore-scripts --omit=dev
 
-COPY server.mjs ./
+COPY server.mjs vault.mjs browser.mjs host.mjs skills.mjs ./
 COPY skills /root/.pi/agent/skills
 
 RUN mkdir -p /workspace /root/.pi/agent/sessions

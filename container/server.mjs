@@ -6,6 +6,8 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { loadSkills, annotateAvailability, toPiSkills, publicSkill } from "./skills.mjs";
 import { detectCapabilities } from "./host.mjs";
+import { handleVaultHttp, VAULT_ROUTES, vaultPublicStatus } from "./vault.mjs";
+import { handleBrowserHttp, browserPublicStatus } from "./browser.mjs";
 
 const PORT = Number(process.env.PORT || 8788);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -58,6 +60,8 @@ function thisBox() {
     kind: capabilities?.cloud ? "cloudflare" : "machine",
     platform: capabilities?.platform || process.platform,
     capabilities,
+    vault: vaultPublicStatus(),
+    browser: browserPublicStatus(),
     skills: catalog.map(publicSkill),
   };
 }
@@ -205,6 +209,9 @@ const server = http.createServer(async (req, res) => {
     res.end();
     return;
   }
+
+  if (VAULT_ROUTES && (await handleVaultHttp(req, res, url))) return;
+  if (await handleBrowserHttp(req, res, url)) return;
 
   if (!capabilities) await refreshCatalog();
 

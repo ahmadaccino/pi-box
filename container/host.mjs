@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { detectBrowserRuntime } from "./browser.mjs";
+import { isVaultAvailable } from "./vault.mjs";
 
 const exec = promisify(execFile);
 
@@ -28,6 +29,7 @@ export async function detectCapabilities() {
     bash: true,
     files: true,
     browser,
+    vault: isVaultAvailable(),
     android,
     ios,
     platform: process.platform,
