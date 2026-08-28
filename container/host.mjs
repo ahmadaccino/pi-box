@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { detectBrowserRuntime } from "./browser.mjs";
 
 const exec = promisify(execFile);
 
@@ -15,13 +16,9 @@ async function hasBin(bin) {
 }
 
 export async function detectCapabilities() {
-  const cloud = process.env.CLOUDFLARE_BROWSER === "1";
-  const browser =
-    cloud ||
-    (await hasBin("chromium")) ||
-    (await hasBin("chromium-browser")) ||
-    (await hasBin("google-chrome")) ||
-    (await hasBin("playwright"));
+  const runtime = await detectBrowserRuntime();
+  const cloudFlag = process.env.CLOUDFLARE_BROWSER === "1";
+  const browser = runtime.available;
   const argent = await hasBin("argent");
   const android = argent || (await hasBin("adb"));
   const ios =
@@ -34,6 +31,6 @@ export async function detectCapabilities() {
     android,
     ios,
     platform: process.platform,
-    cloud: Boolean(process.env.CF_PAGES || process.env.CLOUDFLARE || cloud),
+    cloud: Boolean(process.env.CF_PAGES || process.env.CLOUDFLARE || cloudFlag || runtime.kind === "cloudflare"),
   };
 }

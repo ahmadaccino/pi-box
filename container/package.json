@@ -9,5 +9,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.3"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.55.0",
+    "playwright-core": "^1.55.0"
   }
 }
