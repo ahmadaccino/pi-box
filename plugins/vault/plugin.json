@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "vault",
+  "description": "Encrypted login, payment, address, and contact vault. Models see opaque handles only; secrets are entered on a dedicated page and injected natively.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": { "name": "pi-box" }
+}
