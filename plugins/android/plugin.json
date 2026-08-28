@@ -1,0 +1,7 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "android",
+  "description": "Drive Android emulators and adb devices from a pi-box that has Android SDK or Argent.",
+  "version": "0.1.0",
+  "author": { "name": "pi-box" }
+}

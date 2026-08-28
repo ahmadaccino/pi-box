@@ -1,0 +1,7 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "browser",
+  "description": "Browse the web from this pi-box when the host has a browser (Playwright/Chromium locally, or Cloudflare Browser Rendering in the cloud).",
+  "version": "0.1.0",
+  "author": { "name": "pi-box" }
+}
