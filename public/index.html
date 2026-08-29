@@ -14,8 +14,13 @@
       <div class="gate-card">
         <span class="mark"></span>
         <h1>pi-box</h1>
-        <p>Sign in to message your boxes.</p>
-        <button type="button" id="signin">Sign in</button>
+        <p id="gate-copy">Sign in to message your boxes.</p>
+        <form id="pwform" hidden>
+          <input type="password" id="pw" autocomplete="current-password" placeholder="Password" />
+          <button type="submit">Continue</button>
+        </form>
+        <p id="pwerr" class="gate-err" hidden>Wrong password</p>
+        <button type="button" id="signin" hidden>Sign in</button>
       </div>
     </div>
     <div id="app" class="app" hidden>
@@ -25,9 +30,12 @@
             <span class="mark"></span>
             <strong>pi-box</strong>
           </div>
-          <button type="button" id="userbtn" class="ghost" title="Account">you</button>
+          <div class="aside-actions">
+            <button type="button" id="newchat" class="ghost" title="New chat">New</button>
+            <button type="button" id="userbtn" class="ghost" title="Account">you</button>
+          </div>
         </div>
-        <p class="aside-label">boxes</p>
+        <p class="aside-label">chats</p>
         <nav id="roster"></nav>
         <div id="skill-list" class="skill-list"></div>
         <footer class="aside-foot">
@@ -37,7 +45,7 @@
       <section class="thread">
         <header>
           <div>
-            <strong id="box-name">select a box</strong>
+            <strong id="box-name">select a chat</strong>
             <span class="sub" id="box-meta"></span>
           </div>
           <div class="status" id="status">idle</div>
