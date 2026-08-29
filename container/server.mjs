@@ -2,8 +2,11 @@
 /**
  * Pi HTTP/SSE sidecar. Skills are a first-class primitive on this box.
  */
+import fs from "node:fs";
+import path from "node:path";
 import http from "node:http";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { loadSkills, annotateAvailability, toPiSkills, publicSkill } from "./skills.mjs";
 import { detectCapabilities } from "./host.mjs";
 import { handleVaultHttp, VAULT_ROUTES, vaultPublicStatus } from "./vault.mjs";
@@ -15,12 +18,35 @@ const CWD = process.env.PI_CWD || "/workspace";
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR || "/root/.pi/agent";
 const BOX_ID = process.env.PI_BOX_ID || "local";
 const BOX_NAME = process.env.PI_BOX_NAME || "this machine";
+const DEFAULT_MODEL = process.env.PI_MODEL || "openrouter/z-ai/glm-5.3-flash";
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const sessions = new Map();
 let piMod = null;
 let piLoadError = null;
 let capabilities = null;
 let catalog = [];
+
+function seedAgentDir() {
+  fs.mkdirSync(AGENT_DIR, { recursive: true });
+  const src = path.join(HERE, "models.json");
+  if (fs.existsSync(src)) {
+    fs.copyFileSync(src, path.join(AGENT_DIR, "models.json"));
+  }
+  const settingsPath = path.join(AGENT_DIR, "settings.json");
+  let settings = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  } catch {
+    settings = {};
+  }
+  settings.defaultProvider = process.env.PI_PROVIDER || "openrouter";
+  const raw = DEFAULT_MODEL;
+  settings.defaultModel = raw.startsWith("openrouter/")
+    ? raw.slice("openrouter/".length)
+    : raw;
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+}
 
 async function refreshCatalog() {
   capabilities = await detectCapabilities();
@@ -43,7 +69,8 @@ async function loadPi() {
 
 function hasProviderKey() {
   return Boolean(
-    process.env.ANTHROPIC_API_KEY ||
+    process.env.OPENROUTER_API_KEY ||
+      process.env.ANTHROPIC_API_KEY ||
       process.env.OPENAI_API_KEY ||
       process.env.XAI_API_KEY,
   );
@@ -75,7 +102,25 @@ async function getSession(id) {
     return mock;
   }
   await refreshCatalog();
-  const modelRuntime = await mod.ModelRuntime.create();
+  seedAgentDir();
+  const modelRuntime = await mod.ModelRuntime.create({
+    authPath: path.join(AGENT_DIR, "auth.json"),
+    modelsPath: path.join(AGENT_DIR, "models.json"),
+    allowModelNetwork: true,
+  });
+  const resolved = mod.resolveCliModel({
+    cliModel: DEFAULT_MODEL.includes("/") && !DEFAULT_MODEL.startsWith("openrouter/")
+      ? `openrouter/${DEFAULT_MODEL}`
+      : DEFAULT_MODEL,
+    modelRuntime,
+  });
+  if (resolved.error) {
+    console.warn("[pi-box] model resolve:", resolved.error);
+  } else {
+    console.log(
+      `[pi-box] model ${resolved.model?.provider || "openrouter"}/${resolved.model?.id || DEFAULT_MODEL}`,
+    );
+  }
   const loader = new mod.DefaultResourceLoader({
     cwd: CWD,
     agentDir: AGENT_DIR,
@@ -94,6 +139,8 @@ async function getSession(id) {
     sessionManager: mod.SessionManager.inMemory(CWD),
     modelRuntime,
     resourceLoader: loader,
+    model: resolved.model,
+    thinkingLevel: resolved.thinkingLevel || "medium",
     tools: ["read", "bash", "edit", "write", "ls", "grep", "find"],
   });
   const wrapped = { kind: "pi", id, session };
@@ -123,7 +170,7 @@ async function runMock(res, message) {
     `You said: ${message}\n\n` +
     `Skills on this box: ${live.join(", ") || "none live"}. ` +
     `Unavailable: ${catalog.filter((s) => !s.available).map((s) => s.name).join(", ") || "none"}.\n\n` +
-    `Set ANTHROPIC_API_KEY (or OPENAI_API_KEY / XAI_API_KEY) and restart for a real Pi loop.`;
+    `Set OPENROUTER_API_KEY (or ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY) and restart for a real Pi loop.`;
   for (const chunk of text.split(/(\s+)/)) {
     if (!chunk) continue;
     sseWrite(res, "text", { delta: chunk });
@@ -220,6 +267,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       pi: Boolean(await loadPi()),
       mock: !hasProviderKey() || Boolean(piLoadError),
+      model: DEFAULT_MODEL,
       box: thisBox(),
     });
     return;
