@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pi-box plugins</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      body { display: grid; place-items: start center; padding: 48px 16px 80px; }
+      .plug-card { width: min(640px, 100%); background: var(--paper); border: 1px solid var(--line); padding: 28px 28px 32px; }
+      .plug-card h1 { margin: 12px 0 4px; font-size: 22px; }
+      .lede { color: var(--mute); margin: 0 0 22px; }
+      .nav { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+      .nav a { color: var(--mute); text-decoration: none; }
+      .nav a:hover { color: var(--amber); }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        align-items: center;
+        padding: 14px 0;
+        border-top: 1px solid var(--line);
+      }
+      .row h2 { margin: 0; font-size: 16px; }
+      .row p { margin: 4px 0 0; color: var(--mute); font-size: 13px; }
+      .st { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+      .st.connected { color: var(--ok); }
+      .st.authenticate { color: var(--amber); }
+      .st.error { color: var(--bad); }
+      button.ghost {
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        padding: 8px 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="plug-card">
+      <span class="mark"></span>
+      <p class="nav"><a href="/">chat</a> · <a href="/vault">vault</a></p>
+      <h1>plugins</h1>
+      <p class="lede">Connect Gmail, Calendar, Telegram, and Cloudflare. Tokens stay in the vault. One Google grant covers both Gmail and Calendar.</p>
+      <div id="list">loading…</div>
+    </div>
+    <script src="/plugins.js"></script>
+  </body>
+</html>

@@ -40,6 +40,7 @@ const agent = spawn(process.execPath, ["server.mjs"], {
     PI_CWD: process.env.PI_CWD || path.join(root, "workspace"),
     PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || path.join(root, ".pi-agent"),
     PI_PLUGINS_DIR: process.env.PI_PLUGINS_DIR || path.join(root, "plugins"),
+    PI_BOX_PUBLIC_URL: process.env.PI_BOX_PUBLIC_URL || `http://127.0.0.1:${UI_PORT}`,
   },
   stdio: "inherit",
 });
@@ -98,6 +99,7 @@ const server = http.createServer(async (req, res) => {
 
   let rel = url.pathname === "/" ? "/index.html" : url.pathname;
   if (rel === "/vault") rel = "/vault.html";
+  if (rel === "/plugins") rel = "/plugins.html";
   const filePath = path.normalize(path.join(publicDir, rel));
   if (!filePath.startsWith(publicDir)) {
     res.writeHead(403);

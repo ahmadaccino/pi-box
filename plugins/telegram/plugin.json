@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "telegram",
+  "description": "Talk to the Telegram Bot API through the sidecar proxy. Bot token stays in the vault.",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": { "name": "pi-box" },
+  "auth": "vault",
+  "allowlist": ["api.telegram.org"]
+}

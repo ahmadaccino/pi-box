@@ -1,6 +1,6 @@
 # Browser execution
 
-Real browser sessions live in `container/browser.mjs`. The chat sidecar (`container/server.mjs`) must mount the HTTP handler. The browser skill teaches Pi the recipe; this doc is for operators.
+Real browser sessions live in `container/browser.mjs`. The chat sidecar (`container/server.mjs`) mounts the HTTP handler. The browser skill teaches Pi the recipe; this doc is for operators.
 
 Coordinator (`web_search` / `web_fetch`) first. Browser only for a **known URL** that needs interaction. Search engines are rejected on `startUrl` / `goto`.
 
@@ -15,7 +15,7 @@ npm install playwright
 npx playwright install chromium
 ```
 
-`playwright` (and `playwright-core`) are `optionalDependencies` of `container/package.json`. Docker `npm install --ignore-scripts` skips the browser download.
+`playwright` (and `playwright-core`) are `optionalDependencies` of `container/package.json`. Docker `npm install --ignore-scripts` skips the browser download. **Do not apt-get Chrome. Do not add Chrome to the Dockerfile.**
 
 Env:
 
@@ -25,15 +25,14 @@ Env:
 - `PI_BROWSER_API` — skill curl base (default `http://127.0.0.1:$PORT`)
 - `PORT` — sidecar port (default `8788`)
 - `BROWSER_CDP_URL` — Playwright `connectOverCDP` target (Cloudflare Browser Rendering)
-- `CLOUDFLARE_BROWSER=1` — mark browser capability available (needs CDP to actually drive pages)
+- `BROWSER_CDP_TOKEN` — Bearer token for that CDP websocket (`CLOUDFLARE_API_TOKEN` on the Worker)
+- `CLOUDFLARE_BROWSER=1` — set by the Worker **only** when the `BROWSER` binding exists. This flag alone does **not** make the browser available.
 
-`detectBrowserRuntime()` tries `import("playwright")` then `playwright-core`, then a system `chromium` / `google-chrome` binary, then the Playwright-bundled browser.
-
-Dockerfile already copies `container/*.mjs`, so `browser.mjs` is in the image. It does **not** install Chromium. For a machine box, install Playwright + Chromium on the host (or extend the image yourself).
+`detectBrowserRuntime()` is fail-closed: no `BROWSER_CDP_URL` → `available: false` even if `CLOUDFLARE_BROWSER=1`. Locally it then tries `import("playwright")` / `playwright-core` and a system Chromium binary.
 
 ## Cloudflare Browser Rendering
 
-Do **not** edit `wrangler.jsonc` in this change. Add a binding like this when you are ready:
+`wrangler.jsonc` binds Browser Rendering:
 
 ```jsonc
 {
@@ -41,28 +40,37 @@ Do **not** edit `wrangler.jsonc` in this change. Add a binding like this when yo
 }
 ```
 
-`src/worker.ts` already sets `CLOUDFLARE_BROWSER` from `env.BROWSER`. The container treats `CLOUDFLARE_BROWSER=1` as available (`kind: "cloudflare"`).
+The Worker mints (never logs the token):
 
-To actually drive pages from the container, pass a CDP websocket:
-
-```bash
-BROWSER_CDP_URL=wss://...
+```
+BROWSER_CDP_URL=wss://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID || 096fdb50629de275e5a7e57b33b811ad}/browser-rendering/devtools/browser?keep_alive=600000
+BROWSER_CDP_TOKEN=${CLOUDFLARE_API_TOKEN}
+CLOUDFLARE_BROWSER=1   # only when env.BROWSER is bound
 ```
 
-Then `browser.mjs` runs `chromium.connectOverCDP(process.env.BROWSER_CDP_URL)`.
+Set the API token as a wrangler secret (empty placeholder only in `.dev.vars.example`):
 
-### Leftover CF wiring
+```bash
+npx wrangler secret put CLOUDFLARE_API_TOKEN
+# optional override of the default account id:
+# npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
+```
 
-- `wrangler.jsonc` has **no** `browser` binding yet (add the snippet above).
-- The Worker does not yet mint `BROWSER_CDP_URL` for the container. Until it does, `CLOUDFLARE_BROWSER=1` reports available but `POST /api/browsers` returns 503 with `missing BROWSER_CDP_URL`.
-- Playwright / playwright-core must still be importable in the container to speak CDP.
-- Do not apt-get install Chrome in the Cloudflare container image.
+`browser.mjs` connects with Playwright:
+
+```js
+chromium.connectOverCDP(process.env.BROWSER_CDP_URL, {
+  headers: { Authorization: `Bearer ${process.env.BROWSER_CDP_TOKEN}` },
+});
+```
+
+Playwright / playwright-core must be importable in the container to speak CDP. The image does not install Chrome.
 
 ## Live view
 
 `GET /api/browsers/:id/live` — HTML page that polls `GET /api/browsers/:id/screenshot`.
 
-`public/computer.js` (`PiBoxComputer.renderComputerPane`) iframes that URL, or polls the screenshot as an `<img>`. Do not edit `index.html` / `app.js` until the parent includes the script.
+`public/computer.js` (`PiBoxComputer.renderComputerPane`) iframes that URL, or polls the screenshot as an `<img>`.
 
 ## Takeover (CAPTCHA / OTP / 3DS)
 
@@ -74,7 +82,7 @@ Then `browser.mjs` runs `chromium.connectOverCDP(process.env.BROWSER_CDP_URL)`.
 
 ## Vault fill
 
-If `container/vault.mjs` is present it should `import { fillNative } from "./browser.mjs"` and POST `/api/vault/fill`. After fill, agent screenshots are skipped (`secretsFilled`). Live view for the human still works. Never return claim values.
+If `container/vault.mjs` is present it `import { fillNative } from "./browser.mjs"` and POST `/api/vault/fill`. After fill, agent screenshots are skipped (`secretsFilled`). Live view for the human still works. Never return claim values.
 
 ## HTTP API
 
@@ -91,22 +99,6 @@ If `container/vault.mjs` is present it should `import { fillNative } from "./bro
 
 CORS is set by `server.mjs`. Handlers only write JSON / HTML / PNG.
 
-## Mount snippet for `container/server.mjs`
-
-Do not apply this here (file is locked). Parent should add:
-
-```js
-import { handleBrowserHttp, browserPublicStatus } from "./browser.mjs";
-```
-
-Inside `http.createServer`, after OPTIONS, **before** the 404:
-
-```js
-  if (await handleBrowserHttp(req, res, url)) return;
-```
-
-Optional: include `browser: browserPublicStatus()` on `/healthz` / `/api/boxes`.
-
 ## `container/host.mjs`
 
-Already wired in this change. Browser capability is `detectBrowserRuntime().available` (Playwright module, Playwright/chromium binary, `CLOUDFLARE_BROWSER`, or `BROWSER_CDP_URL`). Android / iOS / bash / files detection is unchanged.
+Browser capability is `detectBrowserRuntime().available` (Playwright locally, or `BROWSER_CDP_URL` in the cloud). `CLOUDFLARE_BROWSER=1` without a CDP URL does not claim a browser.

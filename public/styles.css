@@ -244,5 +244,6 @@ button:disabled { opacity: 0.4; cursor: default; }
 .aside-foot a {
   color: var(--mute);
   text-decoration: none;
+  margin-right: 10px;
 }
 .aside-foot a:hover { color: var(--amber); }

@@ -8,10 +8,29 @@ import {
   timingSafeEqual,
   verifyAuthCookie,
 } from "./password";
+import {
+  clearNonceCookie,
+  exchangeGoogleCode,
+  googleAuthorizeUrl,
+  googleConfigured,
+  mintCdpUrl,
+  mintOAuthState,
+  nonceCookie,
+  oauthSecret,
+  readCookie,
+  redirectUri,
+  verifyOAuthState,
+  GOOGLE_PLUGINS,
+} from "./oauth";
+
+function browserBindingPresent(): boolean {
+  return Boolean(env.BROWSER);
+}
 
 export class PiBox extends Container {
   defaultPort = 8788;
-  sleepAfter = "10m";
+  sleepAfter = "2h";
+  restored = false;
   envVars = {
     ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY ?? "",
     OPENAI_API_KEY: env.OPENAI_API_KEY ?? "",
@@ -20,11 +39,74 @@ export class PiBox extends Container {
     PI_PROVIDER: env.PI_PROVIDER ?? "openrouter",
     PI_MODEL: env.PI_MODEL ?? "openrouter/z-ai/glm-5.3-flash",
     CLERK_PUBLISHABLE_KEY: env.CLERK_PUBLISHABLE_KEY ?? "",
-    CLOUDFLARE_BROWSER: env.BROWSER ? "1" : "",
+    CLOUDFLARE_BROWSER: browserBindingPresent() ? "1" : "",
+    BROWSER_CDP_URL: mintCdpUrl(env),
+    BROWSER_CDP_TOKEN: env.CLOUDFLARE_API_TOKEN ?? "",
+    GATEWAY_TOKEN: env.GATEWAY_TOKEN ?? "",
+    GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID ?? "",
+    GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET ?? "",
+    PI_BOX_PUBLIC_URL: env.PI_BOX_PUBLIC_URL ?? "",
     PI_BOX_ID: "cloud",
     PI_BOX_NAME: "cloudflare",
     VAULT_ENCRYPTION_KEY: env.VAULT_ENCRYPTION_KEY ?? "",
   };
+
+  override onStart() {
+    this.restored = false;
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    await this.ensureRestored();
+    const res = await super.fetch(request);
+    if (shouldPersist(request)) {
+      await this.persistSnapshot();
+    }
+    return res;
+  }
+
+  private internalHeaders(): HeadersInit {
+    const token = env.GATEWAY_TOKEN || "";
+    return token ? { "x-pi-box-internal": token } : {};
+  }
+
+  private async ensureRestored() {
+    if (this.restored) return;
+    await this.ctx.blockConcurrencyWhile(async () => {
+      if (this.restored) return;
+      this.restored = true;
+      const raw = await this.ctx.storage.get<string>("snapshot");
+      if (!raw) return;
+      try {
+        await super.fetch(
+          new Request("http://sidecar/internal/snapshot", {
+            method: "PUT",
+            headers: {
+              "content-type": "application/json",
+              ...this.internalHeaders(),
+            },
+            body: raw,
+          }),
+        );
+      } catch {
+        this.restored = false;
+      }
+    });
+  }
+
+  private async persistSnapshot() {
+    try {
+      const res = await super.fetch(
+        new Request("http://sidecar/internal/snapshot", {
+          headers: this.internalHeaders(),
+        }),
+      );
+      if (!res.ok) return;
+      const body = await res.text();
+      await this.ctx.storage.put("snapshot", body);
+    } catch {
+      /* next request can retry */
+    }
+  }
 }
 
 type Env = {
@@ -42,12 +124,28 @@ type Env = {
   PI_BOX_PASSWORD?: string;
   VAULT_ENCRYPTION_KEY?: string;
   BROWSER?: unknown;
+  CLOUDFLARE_API_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  PI_BOX_PUBLIC_URL?: string;
 };
 
 function json(body: unknown, init: ResponseInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("content-type", "application/json");
   return new Response(JSON.stringify(body), { ...init, headers });
+}
+
+function shouldPersist(request: Request): boolean {
+  const url = new URL(request.url);
+  const method = request.method.toUpperCase();
+  if (method === "GET" || method === "HEAD") return false;
+  return (
+    url.pathname.startsWith("/api/vault") ||
+    url.pathname === "/api/chat" ||
+    url.pathname.startsWith("/api/plugins")
+  );
 }
 
 async function requireUser(request: Request, workerEnv: Env) {
@@ -69,10 +167,50 @@ async function requireUser(request: Request, workerEnv: Env) {
   }
 }
 
+function stableBoxId(user: { userId: string; skip?: boolean } | null): string {
+  if (!user || user.skip || user.userId === "dev" || user.userId === "password") {
+    return "default";
+  }
+  return sanitizeSession(user.userId);
+}
+
 function sessionOf(request: Request, url: URL) {
   return sanitizeSession(
     url.searchParams.get("session") ||
       request.headers.get("x-pi-box-session"),
+  );
+}
+
+function boxOf(workerEnv: Env, user: { userId: string; skip?: boolean } | null) {
+  return getContainer(workerEnv.PI_BOX, stableBoxId(user));
+}
+
+async function upsertGoogleTokens(
+  workerEnv: Env,
+  userId: string,
+  tokens: { access_token: string; refresh_token: string; expires_at: number },
+) {
+  const container = getContainer(workerEnv.PI_BOX, sanitizeSession(userId) || "default");
+  const body = JSON.stringify({
+    plugins: [...GOOGLE_PLUGINS],
+    refresh_token: tokens.refresh_token,
+    access_token: tokens.access_token,
+    expires_at: tokens.expires_at,
+    account: { provider: "google" },
+  });
+  const headers: HeadersInit = {
+    "content-type": "application/json",
+    "x-pi-box-session": "oauth",
+  };
+  if (workerEnv.GATEWAY_TOKEN) {
+    headers["x-pi-box-token"] = workerEnv.GATEWAY_TOKEN;
+  }
+  return container.fetch(
+    new Request("http://sidecar/api/vault/oauth-token", {
+      method: "POST",
+      headers,
+      body,
+    }),
   );
 }
 
@@ -85,6 +223,7 @@ export default {
         clerkPublishableKey: workerEnv.CLERK_PUBLISHABLE_KEY || "",
         authRequired: Boolean(workerEnv.CLERK_SECRET_KEY),
         passwordRequired: Boolean(workerEnv.PI_BOX_PASSWORD),
+        googleOAuth: googleConfigured(workerEnv),
       });
     }
 
@@ -118,10 +257,84 @@ export default {
       );
     }
 
-    if (url.pathname === "/healthz") {
-      const session = sessionOf(request, url);
+    if (url.pathname === "/api/oauth/google/start" && request.method === "GET") {
+      const user = await requireUser(request, workerEnv);
+      if (!user) return new Response("Unauthorized", { status: 401 });
+      if (!googleConfigured(workerEnv)) {
+        return json({ error: "google oauth unset" }, { status: 503 });
+      }
+      const plugin = url.searchParams.get("plugin") || "gmail";
+      if (!GOOGLE_PLUGINS.includes(plugin as (typeof GOOGLE_PLUGINS)[number])) {
+        return json({ error: "plugin must be gmail or google-calendar" }, { status: 400 });
+      }
+      const minted = await mintOAuthState({
+        plugin,
+        userId: stableBoxId(user),
+        secret: oauthSecret(workerEnv),
+      });
+      const loc = googleAuthorizeUrl({
+        clientId: workerEnv.GOOGLE_CLIENT_ID || "",
+        redirect: redirectUri(request.url),
+        state: minted.state,
+      });
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: loc,
+          "set-cookie": nonceCookie(request, minted.nonce),
+        },
+      });
+    }
+
+    if (url.pathname === "/api/oauth/google/callback" && request.method === "GET") {
+      if (!googleConfigured(workerEnv)) {
+        return json({ error: "google oauth unset" }, { status: 503 });
+      }
+      const nonce = readCookie(request, "pi_box_oauth_nonce");
+      const checked = await verifyOAuthState({
+        state: url.searchParams.get("state"),
+        nonce,
+        secret: oauthSecret(workerEnv),
+      });
+      if (!checked) {
+        return json(
+          { error: "invalid oauth state" },
+          { status: 400, headers: { "set-cookie": clearNonceCookie(request) } },
+        );
+      }
+      const code = url.searchParams.get("code");
+      if (!code) return json({ error: "missing code" }, { status: 400 });
       try {
-        const container = getContainer(workerEnv.PI_BOX, session);
+        const tokens = await exchangeGoogleCode({
+          code,
+          redirect: redirectUri(request.url),
+          clientId: workerEnv.GOOGLE_CLIENT_ID || "",
+          clientSecret: workerEnv.GOOGLE_CLIENT_SECRET || "",
+        });
+        const up = await upsertGoogleTokens(
+          workerEnv,
+          checked.userId === "default" ? "default" : checked.userId,
+          tokens,
+        );
+        if (!up.ok) {
+          return json({ error: "vault upsert failed" }, { status: 502 });
+        }
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: "/plugins?google=connected",
+            "set-cookie": clearNonceCookie(request),
+          },
+        });
+      } catch {
+        return json({ error: "token exchange failed" }, { status: 502 });
+      }
+    }
+
+    if (url.pathname === "/healthz") {
+      try {
+        const user = await requireUser(request, workerEnv);
+        const container = boxOf(workerEnv, user);
         return container.fetch(request);
       } catch {
         return json({ ok: true, product: "pi-box", box: "starting" });
@@ -137,14 +350,45 @@ export default {
       if (token && given !== token) {
         return new Response("Unauthorized", { status: 401 });
       }
-      const session = sessionOf(request, url);
-      const container = getContainer(workerEnv.PI_BOX, session);
+      const authPlugin = url.pathname.match(
+        /^\/api\/plugins\/([^/]+)\/authenticate$/,
+      );
+      if (
+        authPlugin &&
+        request.method === "POST" &&
+        googleConfigured(workerEnv) &&
+        GOOGLE_PLUGINS.includes(authPlugin[1] as (typeof GOOGLE_PLUGINS)[number])
+      ) {
+        const minted = await mintOAuthState({
+          plugin: authPlugin[1],
+          userId: stableBoxId(user),
+          secret: oauthSecret(workerEnv),
+        });
+        return json(
+          {
+            url: googleAuthorizeUrl({
+              clientId: workerEnv.GOOGLE_CLIENT_ID || "",
+              redirect: redirectUri(request.url),
+              state: minted.state,
+            }),
+          },
+          { headers: { "set-cookie": nonceCookie(request, minted.nonce) } },
+        );
+      }
+      sessionOf(request, url);
+      const container = boxOf(workerEnv, user);
       return container.fetch(request);
     }
 
     if (url.pathname === "/vault") {
       return workerEnv.ASSETS.fetch(
         new Request(new URL("/vault.html" + url.search, request.url), request),
+      );
+    }
+
+    if (url.pathname === "/plugins") {
+      return workerEnv.ASSETS.fetch(
+        new Request(new URL("/plugins.html" + url.search, request.url), request),
       );
     }
 

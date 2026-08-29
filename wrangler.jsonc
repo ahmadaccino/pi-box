@@ -27,6 +27,7 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PiBox"] }
   ],
+  "browser": { "binding": "BROWSER" },
   "vars": {
     "CLERK_PUBLISHABLE_KEY": ""
   }

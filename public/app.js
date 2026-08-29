@@ -12,11 +12,19 @@ const boxMeta = document.getElementById("box-meta");
 const userBtn = document.getElementById("userbtn");
 const signin = document.getElementById("signin");
 
+const pwform = document.getElementById("pwform");
+const pw = document.getElementById("pw");
+const pwerr = document.getElementById("pwerr");
+const newchat = document.getElementById("newchat");
+
 let clerk = null;
 let boxes = [];
 let current = null;
+let chatSession = localStorage.getItem("pi-box-chat") || crypto.randomUUID();
 let computerSessionId = null;
 let computerTimer = null;
+
+localStorage.setItem("pi-box-chat", chatSession);
 
 function computerPane() {
   return document.getElementById("computer-pane");
@@ -212,13 +220,13 @@ async function chat(message) {
   try {
     const headers = {
       "content-type": "application/json",
-      "x-pi-box-session": current.id,
+      "x-pi-box-session": chatSession,
       ...(await authHeader()),
     };
-    const res = await fetch(`/api/chat?session=${encodeURIComponent(current.id)}`, {
+    const res = await fetch(`/api/chat?session=${encodeURIComponent(chatSession)}`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ message, session: current.id, boxId: current.id }),
+      body: JSON.stringify({ message, session: chatSession, boxId: current.id }),
     });
     if (!res.ok || !res.body) {
       asst.append(`error ${res.status}`);
@@ -302,8 +310,54 @@ function showGate() {
   app.hidden = true;
 }
 
+if (newchat) {
+  newchat.addEventListener("click", () => {
+    chatSession = crypto.randomUUID();
+    localStorage.setItem("pi-box-chat", chatSession);
+    if (log) log.innerHTML = "";
+    setStatus("new chat");
+    input?.focus();
+  });
+}
+
+if (pwform) {
+  pwform.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (pwerr) pwerr.hidden = true;
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password: pw?.value || "" }),
+      });
+      if (!res.ok) {
+        if (pwerr) pwerr.hidden = false;
+        return;
+      }
+      showApp();
+      await loadBoxes();
+      setStatus("ready");
+    } catch {
+      if (pwerr) pwerr.hidden = false;
+    }
+  });
+}
+
 async function boot() {
   const cfg = await fetch("/api/config").then((r) => r.json()).catch(() => ({}));
+  if (cfg.passwordRequired && pwform) {
+    showGate();
+    document.getElementById("gate-copy").textContent = "Password to open this box.";
+    pwform.hidden = false;
+    const probe = await fetch("/api/boxes").catch(() => ({ ok: false }));
+    if (probe.ok) {
+      showApp();
+      await loadBoxes();
+      setStatus("ready");
+      return;
+    }
+    return;
+  }
   if (cfg.clerkPublishableKey && window.Clerk) {
     clerk = new window.Clerk(cfg.clerkPublishableKey);
     await clerk.load();

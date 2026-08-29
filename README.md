@@ -22,8 +22,16 @@ Shipped packs:
 
 - **browser** — Playwright/Chromium on a machine box, or Cloudflare Browser Rendering on a cloud box
 - **vault** — encrypted logins, cards, addresses, contacts. Secrets stay on the box.
+- **gmail** / **google-calendar** — one Google OAuth grant; tokens never enter the model
+- **telegram** — Bot API via vault token
+- **cloudflare** — `api.cloudflare.com` plus a publish-site skill (wrangler uses the vault token only)
 - **android-device** — adb / Argent. Not a Cloudflare container.
 - **ios-simulator** — Mac + Xcode (or Argent). Linux and Cloudflare will never boot a simulator.
+
+Open `/plugins` to Authenticate. Google OAuth redirect URIs:
+
+- `https://pi-box.ahmad-096.workers.dev/api/oauth/google/callback`
+- `http://127.0.0.1:8787/api/oauth/google/callback`
 
 ## Vault and browser
 
@@ -59,15 +67,28 @@ npx wrangler secret put CLERK_SECRET_KEY
 
 Also set `CLERK_PUBLISHABLE_KEY` in `wrangler.jsonc` `vars` (it is public).
 
+## Google OAuth (Gmail + Calendar)
+
+When `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set, Authenticate on `/plugins` starts Google OAuth (`openid email gmail.readonly gmail.send calendar.events`, `access_type=offline`, `prompt=consent`). One grant upserts **both** gmail and google-calendar into the vault. If those env vars are unset, Authenticate falls back to a vault setup URL (paste token).
+
+```bash
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
 ## Cloudflare
 
-Workers Paid + Docker. First request 1–2 minutes cold start.
+Workers Paid + Docker. First request 1–2 minutes cold start. One container per authenticated user (`password` / local-dev → `default`, otherwise Clerk `sub`). Chat identity stays on `x-pi-box-session` / `?session`. Vault + agent session files are snapshotted into Durable Object storage across sleep (`sleepAfter` 2h).
 
 ```bash
 npx wrangler secret put OPENROUTER_API_KEY
 # or: npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put CLOUDFLARE_API_TOKEN
+npx wrangler secret put VAULT_ENCRYPTION_KEY
 npx wrangler deploy
 ```
+
+`CLOUDFLARE_API_TOKEN` is passed into the container as `BROWSER_CDP_TOKEN` for Browser Rendering CDP. Never commit it. Optional: `CLOUDFLARE_ACCOUNT_ID` (defaults to the pi-box account used in docs).
 
 ## License
 

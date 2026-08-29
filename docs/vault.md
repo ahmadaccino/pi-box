@@ -59,6 +59,8 @@ This is not a multi-tenant HSM. Do not put the local-dev key on a shared host.
 | GET | /api/vault/setup-form?setup= | Token metadata (no secrets) |
 | POST | /api/vault/setup | { url } |
 | POST | /api/vault/items | Save (body has secrets; never log) |
+| POST | /api/vault/oauth-token | Upsert plugin OAuth/API token (refresh_token + expires_at in ciphertext; response is metadata only) |
+| GET | /api/vault/oauth-token | Public plugin connection metadata (no secrets) |
 | POST | /api/vault/fill | { handle, browserSessionId } in; { ok, kind, origin, filledClaims } out |
 
 Fill errors include { ok: false, code: "no-browser" } when browser.mjs is

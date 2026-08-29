@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "gmail",
+  "description": "Read and send Gmail through the sidecar proxy. Tokens stay in the vault.",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": { "name": "pi-box" },
+  "auth": "google",
+  "allowlist": ["gmail.googleapis.com", "www.googleapis.com"]
+}
