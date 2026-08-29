@@ -16,7 +16,7 @@
       "class_name": "PiBox",
       "image": "./Dockerfile",
       "instance_type": "standard-1",
-      "max_instances": 2
+      "max_instances": 4
     }
   ],
   "durable_objects": {
