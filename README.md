@@ -46,7 +46,7 @@ npm run dev
 
 http://127.0.0.1:8787
 
-No provider key → mock mode, still lists skills. `export ANTHROPIC_API_KEY=…` for a real Pi loop.
+No provider key → mock mode, still lists skills. Default real loop is OpenRouter `z-ai/glm-5.3-flash` pinned to the Z.ai provider (`OPENROUTER_API_KEY`). Anthropic / OpenAI / xAI keys still work.
 
 ## Clerk
 
@@ -64,7 +64,8 @@ Also set `CLERK_PUBLISHABLE_KEY` in `wrangler.jsonc` `vars` (it is public).
 Workers Paid + Docker. First request 1–2 minutes cold start.
 
 ```bash
-npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put OPENROUTER_API_KEY
+# or: npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler deploy
 ```
 

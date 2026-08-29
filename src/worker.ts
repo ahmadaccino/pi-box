@@ -9,6 +9,9 @@ export class PiBox extends Container {
     ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY ?? "",
     OPENAI_API_KEY: env.OPENAI_API_KEY ?? "",
     XAI_API_KEY: env.XAI_API_KEY ?? "",
+    OPENROUTER_API_KEY: env.OPENROUTER_API_KEY ?? "",
+    PI_PROVIDER: env.PI_PROVIDER ?? "openrouter",
+    PI_MODEL: env.PI_MODEL ?? "openrouter/z-ai/glm-5.3-flash",
     CLERK_PUBLISHABLE_KEY: env.CLERK_PUBLISHABLE_KEY ?? "",
     CLOUDFLARE_BROWSER: env.BROWSER ? "1" : "",
     PI_BOX_ID: "cloud",
@@ -23,6 +26,9 @@ type Env = {
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
   XAI_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
+  PI_PROVIDER?: string;
+  PI_MODEL?: string;
   GATEWAY_TOKEN?: string;
   CLERK_PUBLISHABLE_KEY?: string;
   CLERK_SECRET_KEY?: string;

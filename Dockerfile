@@ -9,6 +9,7 @@ COPY container/package.json ./
 RUN npm install --ignore-scripts --omit=dev
 
 COPY container/*.mjs ./
+COPY container/models.json ./
 COPY container/skills /root/.pi/agent/skills
 COPY plugins /app/plugins
 
