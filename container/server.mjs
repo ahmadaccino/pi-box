@@ -309,6 +309,10 @@ const server = http.createServer(async (req, res) => {
     json(res, 200, {
       clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || "",
       authRequired: Boolean(process.env.CLERK_SECRET_KEY),
+      passwordRequired: Boolean(process.env.PI_BOX_PASSWORD),
+      googleOAuth: Boolean(
+        process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
+      ),
     });
     return;
   }
