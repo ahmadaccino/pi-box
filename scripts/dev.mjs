@@ -32,6 +32,7 @@ try {
 }
 
 const mesh = new MeshStore();
+const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
