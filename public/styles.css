@@ -108,6 +108,38 @@ aside {
 }
 .chip.off { opacity: 0.4; text-decoration: line-through; }
 
+#machines { padding: 0 8px 8px; }
+.machine-row {
+  display: grid;
+  grid-template-columns: 8px 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 8px;
+  font-size: 13px;
+}
+.machine-row .dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 1px;
+  background: var(--mute);
+}
+.machine-row.online .dot { background: var(--ok); }
+.machine-row.drain .dot { background: var(--amber); }
+.machine-row .name { display: block; }
+.machine-row .caps {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--mute);
+  margin-top: 2px;
+}
+.machine-hint {
+  margin: 0 12px 10px;
+  font-size: 11px;
+  color: var(--mute);
+}
+
 .thread {
   display: grid;
   grid-template-rows: auto auto 1fr auto;

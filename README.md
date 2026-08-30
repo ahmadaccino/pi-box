@@ -10,9 +10,11 @@ Every pi-box **indexes** `SKILL.md` files, **lists** them on the box, and **inje
 
 | Endpoint | What |
 | --- | --- |
-| `GET /api/skills` | Catalog for this box (`available`, `requires`, `missing`) |
-| `GET /api/boxes` | Boxes you can message, each with skills + capabilities |
-| `POST /api/chat` | Talk to a box (`session` / `boxId`) |
+| `GET /api/skills` | Catalog (`available` follows the **live mesh roster**) |
+| `GET /api/boxes` | Chat target (one mesh box) with union capabilities |
+| `GET /api/devices` | Machines pane: online / drain / caps / inflight |
+| `POST /api/devices/register` | Join a worker; secret shown once |
+| `POST /api/chat` | Mesh places the turn: live device, `cloud`, or wait |
 
 Pi only receives skills where `available: true` (progressive disclosure, [Agent Skills](https://agentskills.io/specification)).
 
@@ -41,7 +43,7 @@ Real browser sessions (Playwright locally, Cloudflare Browser Rendering in the c
 
 ## Talk to your boxes
 
-Web UI: left roster of pi-boxes, thread on the right. Clerk if `CLERK_SECRET_KEY` is set; local mock skips auth.
+Web UI: left roster of chats, machines pane in the aside, thread on the right. Clerk if `CLERK_SECRET_KEY` is set; local mock skips auth. Mesh placement is documented in [docs/mesh.md](docs/mesh.md).
 
 ## Local
 
@@ -78,9 +80,10 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 
 ## Cloudflare
 
-Workers Paid + Docker. First request 1–2 minutes cold start. One container per authenticated user (`password` / local-dev → `default`, otherwise Clerk `sub`). Chat identity stays on `x-pi-box-session` / `?session`. Vault + agent session files are snapshotted into Durable Object storage across sleep (`sleepAfter` 2h).
+Workers Paid + Docker. First request 1–2 minutes cold start. One container per authenticated user (`password` / local-dev → `default`, otherwise Clerk `sub`) is runtime **`cloud`**. The **Mesh** Durable Object (id = that same box id) is the always-on scheduler: device roster, job leases, R2 snapshot pointers. Chat identity stays on `x-pi-box-session` / `?session`. Vault + agent session files dual-write to R2 (`pi-box-state`) and remain in container DO storage as a cloud fallback (`sleepAfter` 2h).
 
 ```bash
+npx wrangler r2 bucket create pi-box-state
 npx wrangler secret put OPENROUTER_API_KEY
 # or: npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler secret put CLOUDFLARE_API_TOKEN
@@ -89,6 +92,8 @@ npx wrangler deploy
 ```
 
 `CLOUDFLARE_API_TOKEN` is passed into the container as `BROWSER_CDP_TOKEN` for Browser Rendering CDP. Never commit it. Optional: `CLOUDFLARE_ACCOUNT_ID` (defaults to the pi-box account used in docs).
+
+Next slice (not this drop): headless `pi-box node` for a Pi/Linux box, then an Electron app that wraps the sidecar + hosted UI. Not a second repo.
 
 ## License
 

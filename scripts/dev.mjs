@@ -13,6 +13,8 @@ import {
   clearAuthCookie,
   verifyAuthCookie,
 } from "./password.mjs";
+import { MeshStore } from "../src/mesh-state.ts";
+import { handleMeshRequest, isDeviceTokenPath, isMeshDevicePath } from "../src/mesh-http.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicDir = path.join(root, "public");
@@ -29,6 +31,7 @@ try {
   /* no .dev.vars */
 }
 
+const mesh = new MeshStore();
 const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -107,12 +110,46 @@ const server = http.createServer(async (req, res) => {
     password &&
     (url.pathname.startsWith("/api/") || url.pathname === "/healthz") &&
     url.pathname !== "/api/config" &&
-    !url.pathname.startsWith("/api/oauth/google/callback")
+    !url.pathname.startsWith("/api/oauth/google/callback") &&
+    !isDeviceTokenPath(url.pathname)
   ) {
     if (!verifyAuthCookie(req.headers.cookie, password)) {
       sendJson(res, 401, { error: "unauthorized" });
       return;
     }
+  }
+
+  if (isMeshDevicePath(url.pathname)) {
+    const chunks = [];
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      for await (const c of req) chunks.push(c);
+    }
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (v) headers.set(k, Array.isArray(v) ? v.join(", ") : v);
+    }
+    headers.set(
+      "x-pi-box-actor",
+      isDeviceTokenPath(url.pathname) ? "device" : "user",
+    );
+    headers.set("x-pi-box-mesh", "default");
+    const request = new Request(`http://127.0.0.1:${UI_PORT}${url.pathname}${url.search}`, {
+      method: req.method,
+      headers,
+      body: chunks.length ? Buffer.concat(chunks) : undefined,
+    });
+    const upstream = await handleMeshRequest({
+      store: mesh,
+      request,
+      meshId: "default",
+      now: Date.now(),
+      browser: true,
+    });
+    const outHeaders = Object.fromEntries(upstream.headers);
+    res.writeHead(upstream.status, outHeaders);
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    res.end(buf);
+    return;
   }
 
   if (url.pathname.startsWith("/api/") || url.pathname === "/healthz") {

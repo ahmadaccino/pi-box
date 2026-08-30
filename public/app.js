@@ -9,8 +9,10 @@ const send = document.getElementById("send");
 const statusEl = document.getElementById("status");
 const boxName = document.getElementById("box-name");
 const boxMeta = document.getElementById("box-meta");
+const boxRuntime = document.getElementById("box-runtime");
 const userBtn = document.getElementById("userbtn");
 const signin = document.getElementById("signin");
+const machinesEl = document.getElementById("machines");
 
 const pwform = document.getElementById("pwform");
 const pw = document.getElementById("pw");
@@ -107,6 +109,56 @@ function el(tag, cls, text) {
   if (cls) n.className = cls;
   if (text != null) n.textContent = text;
   return n;
+}
+
+function setRuntime(text) {
+  if (boxRuntime) boxRuntime.textContent = text || "";
+}
+
+function deviceCapsLine(device) {
+  const c = device.caps || {};
+  const bits = [];
+  if (c.os || c.platform) bits.push(c.os || c.platform);
+  if (c.arch) bits.push(c.arch);
+  if (c.gpu && c.gpu !== "none") bits.push(c.gpu);
+  const flags = ["browser", "ios", "android", "cloud"].filter((k) => c[k] === true);
+  bits.push(...flags);
+  const inflight = `${device.inflight || 0}/${device.inflightCap || 1}`;
+  bits.push(`jobs ${inflight}`);
+  return bits.join(" · ");
+}
+
+function renderMachines(devices) {
+  if (!machinesEl) return;
+  machinesEl.innerHTML = "";
+  if (!devices.length) {
+    machinesEl.append(el("p", "machine-hint", "no machines yet"));
+    return;
+  }
+  for (const device of devices) {
+    const row = el(
+      "div",
+      "machine-row" + (device.online ? " online" : "") + (device.drain ? " drain" : ""),
+    );
+    row.append(el("span", "dot"));
+    const body = el("div");
+    const state = device.drain ? "drain" : device.online ? "online" : "offline";
+    body.append(el("span", "name", `${device.name || device.id} · ${state}`));
+    body.append(el("span", "caps", deviceCapsLine(device)));
+    row.append(body);
+    machinesEl.append(row);
+  }
+}
+
+async function loadMachines() {
+  try {
+    const res = await fetch("/api/devices", { headers: await authHeader() });
+    if (!res.ok) return;
+    const data = await res.json();
+    renderMachines(data.devices || []);
+  } catch {
+    /* machines pane is optional on older sidecars */
+  }
 }
 
 function capsLine(box) {
@@ -233,6 +285,8 @@ async function chat(message) {
       setStatus("error", "err");
       return;
     }
+    const runtime = res.headers.get("x-pi-box-runtime");
+    if (runtime) setRuntime(runtime === "cloud" ? "cloud" : runtime);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -259,10 +313,18 @@ async function chat(message) {
         if (event === "text" && payload.delta) asst.append(payload.delta);
         else if (event === "tool") asst.tool(payload);
         else if (event === "status" && payload.state === "mock") setStatus("mock", "live");
-        else if (event === "error") {
+        else if (event === "status" && payload.state === "waiting") {
+          setStatus("waiting", "live");
+          setRuntime(payload.message || "waiting");
+          asst.append(payload.message || "Waiting for a matching machine.");
+        } else if (event === "status" && payload.runtime) {
+          setRuntime(payload.runtime);
+        } else if (event === "error") {
           asst.append("\n" + (payload.message || "error"));
           setStatus("error", "err");
-        } else if (event === "done") setStatus(payload.mock ? "mock" : "idle");
+        } else if (event === "done") {
+          setStatus(payload.waiting ? "waiting" : payload.mock ? "mock" : "idle");
+        }
       }
     }
     if (statusEl.textContent === "running") setStatus("idle");
@@ -296,6 +358,7 @@ async function loadBoxes() {
   boxes = data.boxes || [];
   const saved = localStorage.getItem("pi-box-session");
   selectBox(saved && boxes.some((b) => b.id === saved) ? saved : boxes[0]?.id);
+  await loadMachines();
 }
 
 function showApp() {
@@ -385,3 +448,4 @@ async function boot() {
 }
 
 boot();
+setInterval(loadMachines, 15000);
