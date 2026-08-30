@@ -6,13 +6,14 @@
   "description": "Open-source Grok Bot-shaped personal agent. Pi harness, any container, Cloudflare deploy.",
   "license": "MIT",
   "scripts": {
-    "dev": "node scripts/dev.mjs",
+    "dev": "node --experimental-strip-types --no-warnings scripts/dev.mjs",
     "dev:agent": "node container/server.mjs",
     "deploy": "wrangler deploy",
     "types": "wrangler types",
-    "test": "node scripts/test-allowlist.mjs && node scripts/test-authenticate-url.mjs && node scripts/test-snapshot.mjs && node scripts/test-cdp-fail-closed.mjs && npm run test:mesh-place && npm run test:mesh-roster",
+    "test": "node scripts/test-allowlist.mjs && node scripts/test-authenticate-url.mjs && node scripts/test-snapshot.mjs && node scripts/test-cdp-fail-closed.mjs && npm run test:mesh-place && npm run test:mesh-roster && npm run test:mesh-routes",
     "test:mesh-place": "node --experimental-strip-types --no-warnings scripts/mesh-place-check.mjs",
-    "test:mesh-roster": "node --experimental-strip-types --no-warnings scripts/mesh-roster-check.mjs"
+    "test:mesh-roster": "node --experimental-strip-types --no-warnings scripts/mesh-roster-check.mjs",
+    "test:mesh-routes": "node --experimental-strip-types --no-warnings scripts/mesh-routes-check.mjs"
   },
   "dependencies": {
     "@clerk/backend": "^2.14.0",

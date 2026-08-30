@@ -22,6 +22,11 @@ import {
   verifyOAuthState,
   GOOGLE_PLUGINS,
 } from "./oauth";
+import { Mesh } from "./mesh";
+import { isDeviceTokenPath, isMeshDevicePath } from "./mesh-http";
+import { parseMeshId } from "./mesh-state";
+
+export { Mesh };
 
 function browserBindingPresent(): boolean {
   return Boolean(env.BROWSER);
@@ -111,6 +116,7 @@ export class PiBox extends Container {
 
 type Env = {
   PI_BOX: DurableObjectNamespace;
+  MESH: DurableObjectNamespace;
   ASSETS: Fetcher;
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
@@ -183,6 +189,18 @@ function sessionOf(request: Request, url: URL) {
 
 function boxOf(workerEnv: Env, user: { userId: string; skip?: boolean } | null) {
   return getContainer(workerEnv.PI_BOX, stableBoxId(user));
+}
+
+function meshOf(workerEnv: Env, meshId: string) {
+  return workerEnv.MESH.get(workerEnv.MESH.idFromName(meshId));
+}
+
+function gatewayOk(request: Request, url: URL, workerEnv: Env): boolean {
+  const token = workerEnv.GATEWAY_TOKEN;
+  if (!token) return true;
+  const given =
+    url.searchParams.get("token") || request.headers.get("x-pi-box-token");
+  return given === token;
 }
 
 async function upsertGoogleTokens(
@@ -341,13 +359,32 @@ export default {
       }
     }
 
+    if (isMeshDevicePath(url.pathname)) {
+      if (isDeviceTokenPath(url.pathname)) {
+        const deviceId = request.headers.get("x-pi-box-device") || "";
+        const meshId = parseMeshId(deviceId);
+        if (!meshId) return new Response("Unauthorized", { status: 401 });
+        const headers = new Headers(request.headers);
+        headers.set("x-pi-box-actor", "device");
+        headers.set("x-pi-box-mesh", meshId);
+        return meshOf(workerEnv, meshId).fetch(new Request(request, { headers }));
+      }
+      const user = await requireUser(request, workerEnv);
+      if (!user) return new Response("Unauthorized", { status: 401 });
+      if (!gatewayOk(request, url, workerEnv)) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+      const meshId = stableBoxId(user);
+      const headers = new Headers(request.headers);
+      headers.set("x-pi-box-actor", "user");
+      headers.set("x-pi-box-mesh", meshId);
+      return meshOf(workerEnv, meshId).fetch(new Request(request, { headers }));
+    }
+
     if (url.pathname.startsWith("/api/")) {
       const user = await requireUser(request, workerEnv);
       if (!user) return new Response("Unauthorized", { status: 401 });
-      const token = workerEnv.GATEWAY_TOKEN;
-      const given =
-        url.searchParams.get("token") || request.headers.get("x-pi-box-token");
-      if (token && given !== token) {
+      if (!gatewayOk(request, url, workerEnv)) {
         return new Response("Unauthorized", { status: 401 });
       }
       const authPlugin = url.pathname.match(

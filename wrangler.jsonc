@@ -21,11 +21,13 @@
   ],
   "durable_objects": {
     "bindings": [
-      { "class_name": "PiBox", "name": "PI_BOX" }
+      { "class_name": "PiBox", "name": "PI_BOX" },
+      { "class_name": "Mesh", "name": "MESH" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["PiBox"] }
+    { "tag": "v1", "new_sqlite_classes": ["PiBox"] },
+    { "tag": "v2", "new_sqlite_classes": ["Mesh"] }
   ],
   "browser": { "binding": "BROWSER" },
   "vars": {
