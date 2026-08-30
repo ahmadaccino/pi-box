@@ -39,11 +39,17 @@ function actorOf(request: Request): string {
 
 function bearer(request: Request): string {
   const header = request.headers.get("authorization") || "";
-  return header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (header.startsWith("Bearer ")) return header.slice(7);
+  const url = new URL(request.url);
+  return url.searchParams.get("token") || "";
 }
 
 function deviceIdOf(request: Request): string {
-  return request.headers.get("x-pi-box-device") || "";
+  return (
+    request.headers.get("x-pi-box-device") ||
+    new URL(request.url).searchParams.get("device") ||
+    ""
+  );
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {

@@ -28,6 +28,14 @@ import { parseMeshId } from "./mesh-state";
 
 export { Mesh };
 
+function isMeshChatPath(pathname: string): boolean {
+  return (
+    pathname === "/api/chat" ||
+    pathname === "/api/boxes" ||
+    pathname === "/api/skills"
+  );
+}
+
 function browserBindingPresent(): boolean {
   return Boolean(env.BROWSER);
 }
@@ -359,7 +367,7 @@ export default {
       }
     }
 
-    if (isMeshDevicePath(url.pathname)) {
+    if (isMeshDevicePath(url.pathname) || isMeshChatPath(url.pathname)) {
       if (isDeviceTokenPath(url.pathname)) {
         const deviceId = request.headers.get("x-pi-box-device") || "";
         const meshId = parseMeshId(deviceId);

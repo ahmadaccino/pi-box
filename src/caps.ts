@@ -116,3 +116,42 @@ export function publicDevice(device: Device, now: number) {
     inflightCap: cap,
   };
 }
+
+export type SkillRow = {
+  name: string;
+  description?: string;
+  requires?: string[];
+  available?: boolean;
+  missing?: string[];
+  compatibility?: string | null;
+  license?: string | null;
+};
+
+export function annotateSkills(skills: SkillRow[], caps: Caps): SkillRow[] {
+  return skills.map((skill) => {
+    const requires = skill.requires || [];
+    const missing = requires.filter((r) => !satisfiesRequire(caps, r));
+    return {
+      ...skill,
+      requires,
+      available: missing.length === 0,
+      missing,
+    };
+  });
+}
+
+export function unionSkills(skills: SkillRow[], capsList: Caps[]): SkillRow[] {
+  return skills.map((skill) => {
+    const requires = skill.requires || [];
+    const available = capsList.some((caps) => satisfiesAll(caps, requires));
+    const missing = available
+      ? []
+      : [...new Set(requires.filter((r) => capsList.every((caps) => !satisfiesRequire(caps, r))))];
+    return {
+      ...skill,
+      requires,
+      available,
+      missing,
+    };
+  });
+}

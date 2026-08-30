@@ -285,6 +285,8 @@ async function chat(message) {
       setStatus("error", "err");
       return;
     }
+    const runtime = res.headers.get("x-pi-box-runtime");
+    if (runtime) setRuntime(runtime === "cloud" ? "cloud" : runtime);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -311,10 +313,18 @@ async function chat(message) {
         if (event === "text" && payload.delta) asst.append(payload.delta);
         else if (event === "tool") asst.tool(payload);
         else if (event === "status" && payload.state === "mock") setStatus("mock", "live");
-        else if (event === "error") {
+        else if (event === "status" && payload.state === "waiting") {
+          setStatus("waiting", "live");
+          setRuntime(payload.message || "waiting");
+          asst.append(payload.message || "Waiting for a matching machine.");
+        } else if (event === "status" && payload.runtime) {
+          setRuntime(payload.runtime);
+        } else if (event === "error") {
           asst.append("\n" + (payload.message || "error"));
           setStatus("error", "err");
-        } else if (event === "done") setStatus(payload.mock ? "mock" : "idle");
+        } else if (event === "done") {
+          setStatus(payload.waiting ? "waiting" : payload.mock ? "mock" : "idle");
+        }
       }
     }
     if (statusEl.textContent === "running") setStatus("idle");
