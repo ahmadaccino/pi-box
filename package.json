@@ -10,7 +10,8 @@
     "dev:agent": "node container/server.mjs",
     "deploy": "wrangler deploy",
     "types": "wrangler types",
-    "test": "node scripts/test-allowlist.mjs && node scripts/test-authenticate-url.mjs && node scripts/test-snapshot.mjs && node scripts/test-cdp-fail-closed.mjs"
+    "test": "node scripts/test-allowlist.mjs && node scripts/test-authenticate-url.mjs && node scripts/test-snapshot.mjs && node scripts/test-cdp-fail-closed.mjs && npm run test:mesh-place",
+    "test:mesh-place": "node --experimental-strip-types --no-warnings scripts/mesh-place-check.mjs"
   },
   "dependencies": {
     "@clerk/backend": "^2.14.0",
