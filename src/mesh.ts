@@ -6,6 +6,7 @@ import { handleMeshRequest, mintDeviceSecret } from "./mesh-http.ts";
 import { MeshStore, type MeshRecords } from "./mesh-state.ts";
 import { sanitizeSession } from "./password.ts";
 import type { Job } from "./place.ts";
+import { getSnapshotBlob, putSnapshotBlob, snapshotKey } from "./snapshot-r2.ts";
 
 export type MeshEnv = {
   MESH: DurableObjectNamespace;
@@ -36,6 +37,9 @@ export class Mesh extends DurableObject<MeshEnv> {
     }
     if (request.method === "GET" && (path === "/api/boxes" || path === "/api/skills")) {
       return this.handleRoster(request, path);
+    }
+    if (/^\/api\/sessions\/[^/]+\/snapshot$/.test(path)) {
+      return this.handleSessionSnapshot(request, path);
     }
     return this.withStore((store) =>
       handleMeshRequest({
@@ -171,6 +175,11 @@ export class Mesh extends DurableObject<MeshEnv> {
       return sseResponse(failSseBody("no_capacity"), { runtime: "none" });
     }
     if (decision.deviceId === "cloud") {
+      const restored = await this.restoreRuntime(meshId, sessionId, "cloud");
+      if (!restored.ok) {
+        await this.withStore((store) => store.fail(job.id));
+        return sseResponse(failSseBody("snapshot restore failed"), { runtime: "cloud" });
+      }
       const container = getContainer(this.env.PI_BOX, meshId);
       const forwarded = new Request(request.url, {
         method: "POST",
@@ -178,9 +187,16 @@ export class Mesh extends DurableObject<MeshEnv> {
         body: raw,
       });
       const res = await container.fetch(forwarded);
-      return this.tapCloud(res, job.id);
+      return this.tapCloud(res, job.id, meshId, sessionId);
     }
-    return this.dispatchDevice(job, decision.deviceId);
+    const restored = await this.restoreRuntime(meshId, sessionId, decision.deviceId);
+    if (!restored.ok) {
+      await this.withStore((store) => store.fail(job.id));
+      return sseResponse(failSseBody("snapshot restore failed"), {
+        runtime: decision.deviceId,
+      });
+    }
+    return this.dispatchDevice(job, decision.deviceId, meshId);
   }
 
   private async handleRoster(request: Request, path: string): Promise<Response> {
@@ -237,9 +253,10 @@ export class Mesh extends DurableObject<MeshEnv> {
     }
   }
 
-  private tapCloud(res: Response, jobId: string): Response {
+  private tapCloud(res: Response, jobId: string, meshId: string, sessionId: string): Response {
     if (!res.body) {
       void this.withStore((store) => store.ack({ jobId, deviceId: "cloud", now: Date.now() }));
+      void this.captureFromCloud(meshId, sessionId);
       const headers = new Headers(res.headers);
       headers.set("x-pi-box-runtime", "cloud");
       return new Response(res.body, { status: res.status, headers });
@@ -257,6 +274,7 @@ export class Mesh extends DurableObject<MeshEnv> {
         await this.withStore((store) =>
           store.ack({ jobId, deviceId: "cloud", now: Date.now() }),
         );
+        await this.captureFromCloud(meshId, sessionId);
       } catch {
         await this.withStore((store) => store.fail(jobId, "cloud"));
       } finally {
@@ -272,7 +290,7 @@ export class Mesh extends DurableObject<MeshEnv> {
     return new Response(readable, { status: res.status, headers });
   }
 
-  private dispatchDevice(job: Job, deviceId: string): Response {
+  private dispatchDevice(job: Job, deviceId: string, meshId: string): Response {
     const sockets = this.ctx.getWebSockets(deviceId);
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const encoder = new TextEncoder();
@@ -291,7 +309,7 @@ export class Mesh extends DurableObject<MeshEnv> {
       })();
       return sseResponse("", { runtime: runtimeName, stream: readable });
     }
-    this.sendJob(deviceId, job);
+    this.sendJob(deviceId, job, meshId);
     return new Response(readable, {
       headers: {
         "content-type": "text/event-stream; charset=utf-8",
@@ -302,7 +320,7 @@ export class Mesh extends DurableObject<MeshEnv> {
     });
   }
 
-  private sendJob(deviceId: string, job: Job) {
+  private sendJob(deviceId: string, job: Job, meshId = "default") {
     const sockets = this.ctx.getWebSockets(deviceId);
     const wire = {
       type: "job",
@@ -311,6 +329,7 @@ export class Mesh extends DurableObject<MeshEnv> {
         sessionId: job.sessionId,
         require: job.require,
         payload: job.payload,
+        snapshotKey: snapshotKey(meshId, job.sessionId),
         env: {
           OPENROUTER_API_KEY: this.env.OPENROUTER_API_KEY || "",
           ANTHROPIC_API_KEY: this.env.ANTHROPIC_API_KEY || "",
@@ -321,6 +340,83 @@ export class Mesh extends DurableObject<MeshEnv> {
     };
     const text = JSON.stringify(wire);
     for (const ws of sockets) ws.send(text);
+  }
+
+  private async restoreRuntime(
+    meshId: string,
+    sessionId: string,
+    runtime: string,
+  ): Promise<{ ok: boolean }> {
+    const result = await this.withStore((store) =>
+      getSnapshotBlob(this.env.STATE, store, sessionId),
+    );
+    if (!result.ok) {
+      if (result.reason === "no_pointer") return { ok: true };
+      if (result.reason === "r2_unavailable" && runtime === "cloud") return { ok: true };
+      return { ok: false };
+    }
+    if (runtime !== "cloud") return { ok: true };
+    try {
+      const container = getContainer(this.env.PI_BOX, meshId);
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        "x-pi-box-snapshot": "r2",
+      };
+      if (this.env.GATEWAY_TOKEN) headers["x-pi-box-internal"] = this.env.GATEWAY_TOKEN;
+      const res = await container.fetch(
+        new Request("http://sidecar/internal/snapshot?wide=1", {
+          method: "PUT",
+          headers,
+          body: result.body,
+        }),
+      );
+      return { ok: res.ok };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  private async captureFromCloud(meshId: string, sessionId: string) {
+    if (!this.env.STATE) return;
+    try {
+      const container = getContainer(this.env.PI_BOX, meshId);
+      const headers: Record<string, string> = { "x-pi-box-snapshot": "r2" };
+      if (this.env.GATEWAY_TOKEN) headers["x-pi-box-internal"] = this.env.GATEWAY_TOKEN;
+      const res = await container.fetch(
+        new Request("http://sidecar/internal/snapshot?wide=1", { headers }),
+      );
+      if (!res.ok) return;
+      const body = await res.arrayBuffer();
+      await this.withStore((store) =>
+        putSnapshotBlob(this.env.STATE, store, meshId, sessionId, body),
+      );
+    } catch {
+      /* keep in-DO snapshot */
+    }
+  }
+
+  private async handleSessionSnapshot(request: Request, path: string): Promise<Response> {
+    const sessionId = sanitizeSession(path.split("/")[3] || "");
+    const meshId = request.headers.get("x-pi-box-mesh") || "default";
+    const method = request.method.toUpperCase();
+    if (method === "GET") {
+      const got = await this.withStore((store) =>
+        getSnapshotBlob(this.env.STATE, store, sessionId),
+      );
+      if (!got.ok) {
+        return json({ error: got.reason }, { status: got.reason === "no_pointer" ? 404 : 503 });
+      }
+      return new Response(got.body, { headers: { "content-type": "application/json" } });
+    }
+    if (method === "PUT") {
+      const body = await request.arrayBuffer();
+      const pointer = await this.withStore((store) =>
+        putSnapshotBlob(this.env.STATE, store, meshId, sessionId, body),
+      );
+      if (!pointer) return json({ error: "r2_unavailable" }, { status: 503 });
+      return json({ ok: true, pointer });
+    }
+    return json({ error: "method not allowed" }, { status: 405 });
   }
 
   private async writePending(jobId: string, event: string, data: unknown) {

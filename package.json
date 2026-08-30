@@ -10,11 +10,12 @@
     "dev:agent": "node container/server.mjs",
     "deploy": "wrangler deploy",
     "types": "wrangler types",
-    "test": "node scripts/test-allowlist.mjs && node scripts/test-authenticate-url.mjs && node scripts/test-snapshot.mjs && node scripts/test-cdp-fail-closed.mjs && npm run test:mesh-place && npm run test:mesh-roster && npm run test:mesh-routes && npm run test:mesh-chat",
+    "test": "node scripts/test-allowlist.mjs && node scripts/test-authenticate-url.mjs && node scripts/test-snapshot.mjs && node scripts/test-cdp-fail-closed.mjs && npm run test:mesh-place && npm run test:mesh-roster && npm run test:mesh-routes && npm run test:mesh-chat && npm run test:mesh-snapshot",
     "test:mesh-place": "node --experimental-strip-types --no-warnings scripts/mesh-place-check.mjs",
     "test:mesh-roster": "node --experimental-strip-types --no-warnings scripts/mesh-roster-check.mjs",
     "test:mesh-routes": "node --experimental-strip-types --no-warnings scripts/mesh-routes-check.mjs",
-    "test:mesh-chat": "node --experimental-strip-types --no-warnings scripts/mesh-chat-check.mjs"
+    "test:mesh-chat": "node --experimental-strip-types --no-warnings scripts/mesh-chat-check.mjs",
+    "test:mesh-snapshot": "node --experimental-strip-types --no-warnings scripts/mesh-snapshot-check.mjs"
   },
   "dependencies": {
     "@clerk/backend": "^2.14.0",

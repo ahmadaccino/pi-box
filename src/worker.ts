@@ -32,7 +32,8 @@ function isMeshChatPath(pathname: string): boolean {
   return (
     pathname === "/api/chat" ||
     pathname === "/api/boxes" ||
-    pathname === "/api/skills"
+    pathname === "/api/skills" ||
+    /^\/api\/sessions\/[^/]+\/snapshot$/.test(pathname)
   );
 }
 
@@ -125,6 +126,7 @@ export class PiBox extends Container {
 type Env = {
   PI_BOX: DurableObjectNamespace;
   MESH: DurableObjectNamespace;
+  STATE?: R2Bucket;
   ASSETS: Fetcher;
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
@@ -368,7 +370,8 @@ export default {
     }
 
     if (isMeshDevicePath(url.pathname) || isMeshChatPath(url.pathname)) {
-      if (isDeviceTokenPath(url.pathname)) {
+      const deviceHeader = request.headers.get("x-pi-box-device") || "";
+      if (isDeviceTokenPath(url.pathname) || (deviceHeader && url.pathname.includes("/snapshot"))) {
         const deviceId = request.headers.get("x-pi-box-device") || "";
         const meshId = parseMeshId(deviceId);
         if (!meshId) return new Response("Unauthorized", { status: 401 });

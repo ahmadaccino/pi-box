@@ -45,5 +45,29 @@ const sess2 = await readFile(path.join(sessionsDir, "2026-01-01_chat-1.jsonl"), 
 assert.equal(items2, items);
 assert.equal(sess2, sessionBody);
 
+const outside = path.join(tmp, "pwned");
+await restoreSnapshot(agentDir, {
+  version: 1,
+  files: {
+    "../pwned": "nope",
+    "vault/../../pwned": "nope",
+    "sessions/ok.jsonl": "safe\n",
+  },
+});
+const leaked = await readFile(outside, "utf8").catch(() => "");
+assert.equal(leaked, "");
+const ok = await readFile(path.join(sessionsDir, "ok.jsonl"), "utf8");
+assert.equal(ok, "safe\n");
+
+const big = "x".repeat(3 * 1024 * 1024);
+await writeFile(path.join(sessionsDir, "big.jsonl"), big);
+const tight = await collectSnapshot(agentDir);
+assert.equal(tight.files["sessions/big.jsonl"], undefined);
+const wide = await collectSnapshot(agentDir, {
+  maxFile: 32 * 1024 * 1024,
+  maxFiles: 500,
+});
+assert.equal(wide.files["sessions/big.jsonl"], big);
+
 await rm(tmp, { recursive: true, force: true });
 console.log("ok test-snapshot");
