@@ -43,6 +43,10 @@ function tokensFile() {
   return path.join(vaultRoot(), "setup-tokens.json");
 }
 
+function oauthFile() {
+  return path.join(vaultRoot(), "oauth.json");
+}
+
 export function loadEncryptionKey() {
   const raw = (process.env.VAULT_ENCRYPTION_KEY || "").trim();
   if (!raw) {
@@ -138,6 +142,118 @@ async function loadTokens() {
   } catch {
     return {};
   }
+}
+
+async function loadOAuthRows() {
+  try {
+    const parsed = JSON.parse(await readFile(oauthFile(), "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function publicOAuthRow(row) {
+  return {
+    plugin: row.plugin,
+    label: row.label || row.plugin,
+    account: row.account || {},
+    connected: Boolean(row.ciphertext),
+    expiresAt: row.expiresAt || null,
+  };
+}
+
+export async function hasOAuthToken(plugin) {
+  const id = cleanString(plugin, 64);
+  if (!id) return false;
+  const rows = await loadOAuthRows();
+  const row = rows.find((r) => r.plugin === id);
+  if (!row?.ciphertext) return false;
+  const { key, error } = loadEncryptionKey();
+  if (error || !key) return "error";
+  try {
+    decryptJson(row.ciphertext, key);
+    return true;
+  } catch {
+    return "error";
+  }
+}
+
+export async function getOAuthToken(plugin) {
+  const id = cleanString(plugin, 64);
+  const { key, error } = loadEncryptionKey();
+  if (error || !key) return null;
+  const rows = await loadOAuthRows();
+  const row = rows.find((r) => r.plugin === id);
+  if (!row?.ciphertext) return null;
+  try {
+    const secrets = decryptJson(row.ciphertext, key);
+    return { plugin: id, account: row.account || {}, secrets };
+  } catch {
+    return null;
+  }
+}
+
+export async function saveOAuthToken({
+  plugin,
+  secretFields,
+  account,
+  label,
+} = {}) {
+  const { key, error } = loadEncryptionKey();
+  if (error || !key) {
+    const err = new Error(error || "vault unavailable");
+    err.code = "unavailable";
+    throw err;
+  }
+  const id = cleanString(plugin, 64);
+  if (!id) {
+    const err = new Error("plugin required");
+    err.code = "no-plugin";
+    throw err;
+  }
+  const secrets = stringMap(secretFields);
+  if (secretFields && typeof secretFields === "object") {
+    for (const [k, v] of Object.entries(secretFields)) {
+      if (v == null || v === "") continue;
+      if (typeof v === "number") secrets[k] = v;
+      else if (typeof v === "string") secrets[k] = cleanString(v, 4096);
+    }
+  }
+  if (!Object.keys(secrets).length) {
+    const err = new Error("secretFields required");
+    err.code = "no-secrets";
+    throw err;
+  }
+  const expiresAt =
+    secrets.expires_at != null
+      ? Number(secrets.expires_at)
+      : null;
+  const ciphertext = encryptJson(secrets, key);
+  const rows = await loadOAuthRows();
+  const now = new Date().toISOString();
+  const next = {
+    plugin: id,
+    label: cleanString(label, 128) || id,
+    account: stringMap(account),
+    ciphertext,
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
+    updatedAt: now,
+  };
+  const idx = rows.findIndex((r) => r.plugin === id);
+  if (idx >= 0) rows[idx] = next;
+  else rows.push(next);
+  await writeJsonAtomic(oauthFile(), rows);
+  return publicOAuthRow(next);
+}
+
+export async function touchOAuthToken(plugin) {
+  return hasOAuthToken(plugin);
+}
+
+export async function listOAuthPublic() {
+  const rows = await loadOAuthRows();
+  return rows.map(publicOAuthRow);
 }
 
 export function encryptJson(obj, key) {
@@ -387,6 +503,33 @@ export async function saveItem({ kind, label, account, secretFields, token } = {
   const items = await loadItems();
   items.push(item);
   await writeJsonAtomic(itemsFile(), items);
+
+  const pluginTarget = cleanString(setup?.target || account?.origin, 64);
+  if (pluginTarget && /^(gmail|google-calendar|telegram|cloudflare)$/.test(pluginTarget)) {
+    const token =
+      secrets.token ||
+      secrets.api_token ||
+      secrets.bot_token ||
+      secrets.refresh_token ||
+      secrets.password ||
+      secrets.access_token;
+    if (token) {
+      await saveOAuthToken({
+        plugin: pluginTarget,
+        secretFields: {
+          token,
+          refresh_token: secrets.refresh_token,
+          access_token: secrets.access_token || token,
+          expires_at: secrets.expires_at,
+          bot_token: secrets.bot_token,
+          api_token: secrets.api_token,
+        },
+        account: { origin: pluginTarget },
+        label: itemLabel,
+      });
+    }
+  }
+
   return toPublicItem(item);
 }
 
@@ -567,6 +710,56 @@ export async function handleVaultHttp(req, res, url) {
       json(res, code === "unavailable" ? 503 : 400, { error: "save failed", code });
       return true;
     }
+  }
+
+  if (method === "POST" && p === "/api/vault/oauth-token") {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch {
+      json(res, 400, { error: "invalid json" });
+      return true;
+    }
+    try {
+      const plugins = Array.isArray(body?.plugins)
+        ? body.plugins
+        : [body?.plugin].filter(Boolean);
+      if (!plugins.length) {
+        json(res, 400, { error: "plugin required" });
+        return true;
+      }
+      const secretFields = body?.secretFields || {
+        refresh_token: body?.refresh_token,
+        access_token: body?.access_token,
+        expires_at: body?.expires_at,
+        token: body?.token,
+        bot_token: body?.bot_token,
+        api_token: body?.api_token,
+      };
+      const saved = [];
+      for (const plugin of plugins) {
+        saved.push(
+          await saveOAuthToken({
+            plugin,
+            secretFields,
+            account: body?.account,
+            label: body?.label || plugin,
+          }),
+        );
+      }
+      json(res, 200, { ok: true, items: saved });
+      return true;
+    } catch (err) {
+      const code = err.code || "save-failed";
+      json(res, code === "unavailable" ? 503 : 400, { error: "save failed", code });
+      return true;
+    }
+  }
+
+  if (method === "GET" && p === "/api/vault/oauth-token") {
+    const items = await listOAuthPublic();
+    json(res, 200, { items });
+    return true;
   }
 
   if (method === "POST" && p === "/api/vault/fill") {

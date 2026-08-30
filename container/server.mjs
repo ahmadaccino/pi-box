@@ -11,6 +11,9 @@ import { loadSkills, annotateAvailability, toPiSkills, publicSkill } from "./ski
 import { detectCapabilities } from "./host.mjs";
 import { handleVaultHttp, VAULT_ROUTES, vaultPublicStatus } from "./vault.mjs";
 import { handleBrowserHttp, browserPublicStatus } from "./browser.mjs";
+import { handlePluginsHttp } from "./plugins.mjs";
+import { handleSnapshotHttp } from "./snapshot.mjs";
+import { handleGoogleOAuthHttp } from "./google-oauth.mjs";
 
 const PORT = Number(process.env.PORT || 8788);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -80,6 +83,32 @@ function sseWrite(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+async function diskSessionManager(mod, sessionId) {
+  const sessionDir = path.join(AGENT_DIR, "sessions");
+  fs.mkdirSync(sessionDir, { recursive: true });
+  if (typeof mod.SessionManager?.create !== "function") {
+    return mod.SessionManager.inMemory(CWD);
+  }
+  try {
+    if (typeof mod.SessionManager.list === "function") {
+      const listed = await mod.SessionManager.list(CWD, sessionDir);
+      const found = Array.isArray(listed)
+        ? listed.find(
+            (s) =>
+              s?.id === sessionId ||
+              (typeof s?.path === "string" && s.path.includes(sessionId)),
+          )
+        : null;
+      if (found?.path && typeof mod.SessionManager.open === "function") {
+        return mod.SessionManager.open(found.path, sessionDir);
+      }
+    }
+    return mod.SessionManager.create(CWD, sessionDir, { id: sessionId });
+  } catch {
+    return mod.SessionManager.inMemory(CWD);
+  }
+}
+
 function thisBox() {
   return {
     id: BOX_ID,
@@ -136,7 +165,7 @@ async function getSession(id) {
   const { session } = await mod.createAgentSession({
     cwd: CWD,
     agentDir: AGENT_DIR,
-    sessionManager: mod.SessionManager.inMemory(CWD),
+    sessionManager: await diskSessionManager(mod, id),
     modelRuntime,
     resourceLoader: loader,
     model: resolved.model,
@@ -249,7 +278,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "content-type, authorization, x-pi-box-session, x-pi-box-token",
+    "content-type, authorization, x-pi-box-session, x-pi-box-token, x-pi-box-internal",
   );
   if (req.method === "OPTIONS") {
     res.writeHead(204);
@@ -257,7 +286,10 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (await handleSnapshotHttp(req, res, url)) return;
+  if (await handleGoogleOAuthHttp(req, res, url)) return;
   if (VAULT_ROUTES && (await handleVaultHttp(req, res, url))) return;
+  if (await handlePluginsHttp(req, res, url)) return;
   if (await handleBrowserHttp(req, res, url)) return;
 
   if (!capabilities) await refreshCatalog();
@@ -277,6 +309,10 @@ const server = http.createServer(async (req, res) => {
     json(res, 200, {
       clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || "",
       authRequired: Boolean(process.env.CLERK_SECRET_KEY),
+      passwordRequired: Boolean(process.env.PI_BOX_PASSWORD),
+      googleOAuth: Boolean(
+        process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
+      ),
     });
     return;
   }

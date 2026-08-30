@@ -7,6 +7,12 @@ import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  checkPassword,
+  mintAuthCookie,
+  clearAuthCookie,
+  verifyAuthCookie,
+} from "./password.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicDir = path.join(root, "public");
@@ -40,6 +46,7 @@ const agent = spawn(process.execPath, ["server.mjs"], {
     PI_CWD: process.env.PI_CWD || path.join(root, "workspace"),
     PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || path.join(root, ".pi-agent"),
     PI_PLUGINS_DIR: process.env.PI_PLUGINS_DIR || path.join(root, "plugins"),
+    PI_BOX_PUBLIC_URL: process.env.PI_BOX_PUBLIC_URL || `http://127.0.0.1:${UI_PORT}`,
   },
   stdio: "inherit",
 });
@@ -59,8 +66,54 @@ async function serveFile(res, filePath) {
   res.end(body);
 }
 
+function sendJson(res, code, body, headers = {}) {
+  res.writeHead(code, { "content-type": "application/json; charset=utf-8", ...headers });
+  res.end(JSON.stringify(body));
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  const https = url.protocol === "https:";
+  const password = process.env.PI_BOX_PASSWORD || "";
+
+  if (url.pathname === "/api/login" && req.method === "POST") {
+    if (!password) {
+      sendJson(res, 200, { ok: true, skipped: true });
+      return;
+    }
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    let body = {};
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    } catch {
+      sendJson(res, 400, { error: "invalid json" });
+      return;
+    }
+    if (!checkPassword(String(body.password || ""), password)) {
+      sendJson(res, 401, { error: "invalid password" });
+      return;
+    }
+    sendJson(res, 200, { ok: true }, { "set-cookie": mintAuthCookie(password, { https }) });
+    return;
+  }
+
+  if (url.pathname === "/api/logout" && req.method === "POST") {
+    sendJson(res, 200, { ok: true }, { "set-cookie": clearAuthCookie({ https }) });
+    return;
+  }
+
+  if (
+    password &&
+    (url.pathname.startsWith("/api/") || url.pathname === "/healthz") &&
+    url.pathname !== "/api/config" &&
+    !url.pathname.startsWith("/api/oauth/google/callback")
+  ) {
+    if (!verifyAuthCookie(req.headers.cookie, password)) {
+      sendJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+  }
 
   if (url.pathname.startsWith("/api/") || url.pathname === "/healthz") {
     const target = `http://127.0.0.1:${AGENT_PORT}${url.pathname}${url.search}`;
@@ -98,6 +151,7 @@ const server = http.createServer(async (req, res) => {
 
   let rel = url.pathname === "/" ? "/index.html" : url.pathname;
   if (rel === "/vault") rel = "/vault.html";
+  if (rel === "/plugins") rel = "/plugins.html";
   const filePath = path.normalize(path.join(publicDir, rel));
   if (!filePath.startsWith(publicDir)) {
     res.writeHead(403);

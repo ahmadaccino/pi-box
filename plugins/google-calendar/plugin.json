@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "google-calendar",
+  "description": "List and create Google Calendar events through the sidecar proxy. Tokens stay in the vault.",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": { "name": "pi-box" },
+  "auth": "google",
+  "allowlist": ["www.googleapis.com", "calendar.googleapis.com"]
+}

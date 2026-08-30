@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "cloudflare",
+  "description": "Call api.cloudflare.com and publish a folder with wrangler using a vault API token only.",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": { "name": "pi-box" },
+  "auth": "vault",
+  "allowlist": ["api.cloudflare.com"]
+}

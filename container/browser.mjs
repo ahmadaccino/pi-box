@@ -152,6 +152,18 @@ async function findChromium(pw) {
   return null;
 }
 
+export function resetBrowserRuntimeCache() {
+  cachedRuntime = null;
+  cachedRuntimeAt = 0;
+}
+
+/** Headers for Playwright connectOverCDP. Never log BROWSER_CDP_TOKEN. */
+export function cdpConnectHeaders() {
+  const token = process.env.BROWSER_CDP_TOKEN;
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
+}
+
 export async function detectBrowserRuntime() {
   const now = Date.now();
   if (cachedRuntime && now - cachedRuntimeAt < 4000) return cachedRuntime;
@@ -163,9 +175,9 @@ export async function detectBrowserRuntime() {
   }
   if (process.env.CLOUDFLARE_BROWSER === "1") {
     cachedRuntime = {
-      available: true,
+      available: false,
       kind: "cloudflare",
-      detail: "CLOUDFLARE_BROWSER=1 (set BROWSER_CDP_URL to connectOverCDP; see docs/browser.md)",
+      detail: "CLOUDFLARE_BROWSER=1 but BROWSER_CDP_URL is unset",
     };
     cachedRuntimeAt = now;
     return cachedRuntime;
@@ -179,7 +191,7 @@ export async function detectBrowserRuntime() {
   } else if (chrome) {
     cachedRuntime = { available: true, kind: "playwright", detail: "chromium at " + chrome.path + "; install playwright to drive it" };
   } else {
-    cachedRuntime = { available: false, kind: null, detail: "no playwright module, chromium binary, or CLOUDFLARE_BROWSER/BROWSER_CDP_URL" };
+    cachedRuntime = { available: false, kind: null, detail: "no playwright module, chromium binary, or BROWSER_CDP_URL" };
   }
   cachedRuntimeAt = now;
   return cachedRuntime;
@@ -270,7 +282,9 @@ async function bootEngine() {
   if (runtime.kind === "cloudflare") {
     const cdp = process.env.BROWSER_CDP_URL;
     if (cdp && pw) {
-      const browser = await pw.chromium.connectOverCDP(cdp);
+      const browser = await pw.chromium.connectOverCDP(cdp, {
+        headers: cdpConnectHeaders(),
+      });
       const context = browser.contexts()[0] || (await browser.newContext({ viewport: VIEWPORT }));
       return { kind: "cloudflare", playwright: pw, browser, context, persistent: false };
     }
