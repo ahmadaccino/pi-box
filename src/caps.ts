@@ -44,7 +44,7 @@ export function inflightCap(ramGb?: number, isCloud = false): number {
 export function isLive(device: Device, now: number): boolean {
   if (device.drain) return false;
   if (device.id === "cloud" || device.caps.cloud) return true;
-  return now - device.lastSeen <= DEAD_AFTER_MS;
+  return now - device.lastSeen < DEAD_AFTER_MS;
 }
 
 export function jobFallback(require: string[]): "cloud" | "wait" {
