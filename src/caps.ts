@@ -63,6 +63,14 @@ export function satisfiesRequire(caps: Caps, req: string): boolean {
   if (req === "gpu=nvidia" || req === "cuda") return caps.gpu === "nvidia";
   if (req === "arch=arm64") return caps.arch === "arm64";
   if (req === "arch=x64") return caps.arch === "x64";
+  if (req === "inference" || req === "inference=openai-compat") {
+    return (
+      caps.features?.includes("inference") ||
+      caps.features?.includes("inference=openai-compat") ||
+      caps.gpu === "nvidia" ||
+      Boolean((caps as Record<string, unknown>).inference)
+    );
+  }
   if (caps.features?.includes(req)) return true;
   return Boolean((caps as Record<string, unknown>)[req]);
 }

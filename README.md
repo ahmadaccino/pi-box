@@ -4,6 +4,8 @@ Open-source personal agent. Grok Bot-shaped *information architecture* (roster o
 
 Not a Grok Bot clone. Not an OpenClaw fork. Not a Rakazo fork.
 
+One product: Cloudflare Worker + Durable Objects + optional local devices. Mesh DO is always the scheduler. Devices never become master.
+
 ## Skills primitive
 
 Every pi-box **indexes** `SKILL.md` files, **lists** them on the box, and **injects live ones into Pi**. A skill that needs a browser / Android / iOS simulator stays in the catalog but is marked unavailable until that host can actually do it.
@@ -45,6 +47,33 @@ Real browser sessions (Playwright locally, Cloudflare Browser Rendering in the c
 
 Web UI: left roster of chats, machines pane in the aside, thread on the right. Clerk if `CLERK_SECRET_KEY` is set; local mock skips auth. Mesh placement is documented in [docs/mesh.md](docs/mesh.md).
 
+## Join a machine
+
+Login (existing password page and/or Clerk) is the pairing. Then a device token.
+
+| Machine | How |
+| --- | --- |
+| Raspberry Pi / servers (Linux x64 or arm64) | Headless `pi-box node` only. No Electron GUI. |
+| Mac Mini / MacBook (macOS arm64 or x64) | Electron app, or `pi-box node` |
+| Ryzen desktop / Steam Deck (Linux x64) | Electron app, or `pi-box node` |
+
+```bash
+cd container && npm install --ignore-scripts && cd ..
+node bin/pi-box.mjs node --origin http://127.0.0.1:8787 --name ryzen-box --password "$PI_BOX_PASSWORD"
+node bin/pi-box.mjs node --origin https://pi-box.ahmad-096.workers.dev --name pi-drawer --password "$PI_BOX_PASSWORD"
+```
+
+Identity (device id + secret) is stored in `~/.pi-box/` (0600). Electron additionally copies the secret into the OS keychain (`keytar`). Details: [docs/mesh.md](docs/mesh.md).
+
+Electron (loads the hosted `public/` UI, keeps the sidecar alive while signed in):
+
+```bash
+cd desktop && npm install
+PI_BOX_ORIGIN=https://pi-box.ahmad-096.workers.dev npm start
+# or local:
+PI_BOX_ORIGIN=http://127.0.0.1:8787 npm start
+```
+
 ## Local
 
 ```bash
@@ -57,6 +86,8 @@ npm run dev
 http://127.0.0.1:8787
 
 No provider key → mock mode, still lists skills. Default real loop is OpenRouter `z-ai/glm-5.3-flash` pinned to the Z.ai provider (`OPENROUTER_API_KEY`). Anthropic / OpenAI / xAI keys still work.
+
+`wrangler dev` is the full mesh (DO + optional local R2). `npm run dev` is the static UI + sidecar; device register/heartbeat/poll work there too.
 
 ## Clerk
 
@@ -78,22 +109,38 @@ npx wrangler secret put GOOGLE_CLIENT_ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
-## Cloudflare
+Redirects:
+
+- `https://pi-box.ahmad-096.workers.dev/api/oauth/google/callback`
+- `http://127.0.0.1:8787/api/oauth/google/callback`
+
+## Cloudflare deploy
 
 Workers Paid + Docker. First request 1–2 minutes cold start. One container per authenticated user (`password` / local-dev → `default`, otherwise Clerk `sub`) is runtime **`cloud`**. The **Mesh** Durable Object (id = that same box id) is the always-on scheduler: device roster, job leases, R2 snapshot pointers. Chat identity stays on `x-pi-box-session` / `?session`. Vault + agent session files dual-write to R2 (`pi-box-state`) and remain in container DO storage as a cloud fallback (`sleepAfter` 2h).
 
+Keep these Worker secrets (do not commit values):
+
+- `PI_BOX_PASSWORD`
+- `OPENROUTER_API_KEY` (or `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY`)
+- `VAULT_ENCRYPTION_KEY`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `CLOUDFLARE_API_TOKEN` (passed into the container as `BROWSER_CDP_TOKEN`)
+
 ```bash
 npx wrangler r2 bucket create pi-box-state
+npx wrangler secret put PI_BOX_PASSWORD
 npx wrangler secret put OPENROUTER_API_KEY
-# or: npx wrangler secret put ANTHROPIC_API_KEY
-npx wrangler secret put CLOUDFLARE_API_TOKEN
 npx wrangler secret put VAULT_ENCRYPTION_KEY
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put CLOUDFLARE_API_TOKEN
+# optional: npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
+# optional: npx wrangler secret put CLERK_SECRET_KEY
 npx wrangler deploy
 ```
 
-`CLOUDFLARE_API_TOKEN` is passed into the container as `BROWSER_CDP_TOKEN` for Browser Rendering CDP. Never commit it. Optional: `CLOUDFLARE_ACCOUNT_ID` (defaults to the pi-box account used in docs).
-
-Next slice (not this drop): headless `pi-box node` for a Pi/Linux box, then an Electron app that wraps the sidecar + hosted UI. Not a second repo.
+`npx wrangler deploy` **rebuilds the container image**. After sidecar/Dockerfile/plugin changes do **not** use `--containers-rollout=none` (Worker-only). `CLOUDFLARE_API_TOKEN` is never committed. Optional: `CLOUDFLARE_ACCOUNT_ID` (defaults to the pi-box account used in docs).
 
 ## License
 

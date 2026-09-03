@@ -197,4 +197,38 @@ assert.equal(isLive(mini({ drain: true }), NOW), false);
   assert.equal(got.fail, "no_capacity");
 }
 
+{
+  const deadMini = mini({ lastSeen: NOW - 60_000 });
+  const got = place(
+    job({ affinity: "d_default_mini" }),
+    [linux(), deadMini],
+    cloud(),
+    NOW,
+  );
+  assert.equal(got.deviceId, "d_default_linux");
+}
+
+{
+  const got = place(
+    job({ require: ["inference"] }),
+    [linux({ caps: { ...linux().caps, features: ["browser", "cuda", "inference"] } }), mini()],
+    cloud(),
+    NOW,
+  );
+  assert.equal(got.deviceId, "d_default_linux");
+}
+
+{
+  const noGpu = linux({
+    caps: { ...linux().caps, gpu: "none", features: ["browser"] },
+  });
+  const got = place(
+    job({ require: ["inference"], fallback: "wait" }),
+    [noGpu, mini()],
+    cloud(),
+    NOW,
+  );
+  assert.equal(got.wait, true);
+}
+
 console.log("ok mesh-place-check");

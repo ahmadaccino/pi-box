@@ -50,6 +50,41 @@ export class Mesh extends DurableObject<MeshEnv> {
         browser: Boolean(this.env.BROWSER),
         mintSecret: mintDeviceSecret,
         acceptWebSocket: (deviceId) => this.acceptDeviceSocket(deviceId),
+        onDeviceEvent: (jobId, event, data) => this.writePending(jobId, event, data),
+        onDeviceAck: async (jobId, deviceId) => {
+          await this.writePending(jobId, "status", { state: "pi", runtime: deviceId });
+          await this.writePending(jobId, "done", { mock: false, runtime: deviceId });
+          await this.closePending(jobId);
+        },
+        replaceJob: async (job) => {
+          const next = planChatTurn(store, {
+            sessionId: job.sessionId,
+            require: job.require,
+            prefer: job.prefer,
+            affinity: null,
+            payload: job.payload,
+            jobId: job.id,
+            now: Date.now(),
+          });
+          if (next.decision.wait) {
+            await this.writeRaw(job.id, waitingSseBody(next.job));
+            await this.closePending(job.id);
+            return;
+          }
+          if (next.decision.deviceId === "cloud") {
+            await this.closePending(job.id);
+            return;
+          }
+          if (next.decision.deviceId) {
+            this.sendJob(next.decision.deviceId, next.job);
+          }
+        },
+        jobEnv: () => ({
+          OPENROUTER_API_KEY: this.env.OPENROUTER_API_KEY || "",
+          ANTHROPIC_API_KEY: this.env.ANTHROPIC_API_KEY || "",
+          OPENAI_API_KEY: this.env.OPENAI_API_KEY || "",
+          XAI_API_KEY: this.env.XAI_API_KEY || "",
+        }),
       }),
     );
   }
@@ -297,19 +332,9 @@ export class Mesh extends DurableObject<MeshEnv> {
     const writer = writable.getWriter();
     this.pending.set(job.id, { writer, encoder, deviceId });
     const runtimeName = deviceId;
-    const intro =
-      sseChunk("status", { state: "pi", runtime: runtimeName }) ;
+    const intro = sseChunk("status", { state: "pi", runtime: runtimeName });
     void writer.write(encoder.encode(intro));
-    if (!sockets.length) {
-      void (async () => {
-        await this.withStore((store) => store.nack({ jobId: job.id, unsatisfied: [], now: Date.now() }));
-        await writer.write(encoder.encode(failSseBody("device offline")));
-        await writer.close();
-        this.pending.delete(job.id);
-      })();
-      return sseResponse("", { runtime: runtimeName, stream: readable });
-    }
-    this.sendJob(deviceId, job, meshId);
+    if (sockets.length) this.sendJob(deviceId, job, meshId);
     return new Response(readable, {
       headers: {
         "content-type": "text/event-stream; charset=utf-8",

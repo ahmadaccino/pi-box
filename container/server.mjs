@@ -2,254 +2,39 @@
 /**
  * Pi HTTP/SSE sidecar. Skills are a first-class primitive on this box.
  */
-import fs from "node:fs";
-import path from "node:path";
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { loadSkills, annotateAvailability, toPiSkills, publicSkill } from "./skills.mjs";
-import { detectCapabilities } from "./host.mjs";
+import { publicSkill } from "./skills.mjs";
 import { handleVaultHttp, VAULT_ROUTES, vaultPublicStatus } from "./vault.mjs";
 import { handleBrowserHttp, browserPublicStatus } from "./browser.mjs";
 import { handlePluginsHttp } from "./plugins.mjs";
 import { handleSnapshotHttp } from "./snapshot.mjs";
 import { handleGoogleOAuthHttp } from "./google-oauth.mjs";
+import { createAgentRuntime, hasProviderKey } from "./agent.mjs";
 
 const PORT = Number(process.env.PORT || 8788);
 const HOST = process.env.HOST || "0.0.0.0";
-const CWD = process.env.PI_CWD || "/workspace";
-const AGENT_DIR = process.env.PI_CODING_AGENT_DIR || "/root/.pi/agent";
 const BOX_ID = process.env.PI_BOX_ID || "local";
 const BOX_NAME = process.env.PI_BOX_NAME || "this machine";
 const DEFAULT_MODEL = process.env.PI_MODEL || "openrouter/z-ai/glm-5.3-flash";
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-const sessions = new Map();
-let piMod = null;
-let piLoadError = null;
-let capabilities = null;
-let catalog = [];
-
-function seedAgentDir() {
-  fs.mkdirSync(AGENT_DIR, { recursive: true });
-  const src = path.join(HERE, "models.json");
-  if (fs.existsSync(src)) {
-    fs.copyFileSync(src, path.join(AGENT_DIR, "models.json"));
-  }
-  const settingsPath = path.join(AGENT_DIR, "settings.json");
-  let settings = {};
-  try {
-    settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  } catch {
-    settings = {};
-  }
-  settings.defaultProvider = process.env.PI_PROVIDER || "openrouter";
-  const raw = DEFAULT_MODEL;
-  settings.defaultModel = raw.startsWith("openrouter/")
-    ? raw.slice("openrouter/".length)
-    : raw;
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-}
-
-async function refreshCatalog() {
-  capabilities = await detectCapabilities();
-  const raw = await loadSkills();
-  catalog = annotateAvailability(raw, capabilities);
-  return catalog;
-}
-
-async function loadPi() {
-  if (piMod || piLoadError) return piMod;
-  try {
-    piMod = await import("@earendil-works/pi-coding-agent");
-    return piMod;
-  } catch (err) {
-    piLoadError = err;
-    console.warn("[pi-box] Pi SDK not loaded, mock mode:", err?.message || err);
-    return null;
-  }
-}
-
-function hasProviderKey() {
-  return Boolean(
-    process.env.OPENROUTER_API_KEY ||
-      process.env.ANTHROPIC_API_KEY ||
-      process.env.OPENAI_API_KEY ||
-      process.env.XAI_API_KEY,
-  );
-}
+const runtime = createAgentRuntime();
 
 function sseWrite(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-}
-
-async function diskSessionManager(mod, sessionId) {
-  const sessionDir = path.join(AGENT_DIR, "sessions");
-  fs.mkdirSync(sessionDir, { recursive: true });
-  if (typeof mod.SessionManager?.create !== "function") {
-    return mod.SessionManager.inMemory(CWD);
-  }
-  try {
-    if (typeof mod.SessionManager.list === "function") {
-      const listed = await mod.SessionManager.list(CWD, sessionDir);
-      const found = Array.isArray(listed)
-        ? listed.find(
-            (s) =>
-              s?.id === sessionId ||
-              (typeof s?.path === "string" && s.path.includes(sessionId)),
-          )
-        : null;
-      if (found?.path && typeof mod.SessionManager.open === "function") {
-        return mod.SessionManager.open(found.path, sessionDir);
-      }
-    }
-    return mod.SessionManager.create(CWD, sessionDir, { id: sessionId });
-  } catch {
-    return mod.SessionManager.inMemory(CWD);
-  }
 }
 
 function thisBox() {
   return {
     id: BOX_ID,
     name: BOX_NAME,
-    kind: capabilities?.cloud ? "cloudflare" : "machine",
-    platform: capabilities?.platform || process.platform,
-    capabilities,
+    kind: runtime.capabilities()?.cloud ? "cloudflare" : "machine",
+    platform: runtime.capabilities()?.platform || process.platform,
+    capabilities: runtime.capabilities(),
     vault: vaultPublicStatus(),
     browser: browserPublicStatus(),
-    skills: catalog.map(publicSkill),
+    skills: runtime.catalog().map(publicSkill),
   };
-}
-
-async function getSession(id) {
-  if (sessions.has(id)) return sessions.get(id);
-  const mod = await loadPi();
-  if (!mod || !hasProviderKey()) {
-    const mock = { kind: "mock", id };
-    sessions.set(id, mock);
-    return mock;
-  }
-  await refreshCatalog();
-  seedAgentDir();
-  const modelRuntime = await mod.ModelRuntime.create({
-    authPath: path.join(AGENT_DIR, "auth.json"),
-    modelsPath: path.join(AGENT_DIR, "models.json"),
-    allowModelNetwork: true,
-  });
-  const resolved = mod.resolveCliModel({
-    cliModel: DEFAULT_MODEL.includes("/") && !DEFAULT_MODEL.startsWith("openrouter/")
-      ? `openrouter/${DEFAULT_MODEL}`
-      : DEFAULT_MODEL,
-    modelRuntime,
-  });
-  if (resolved.error) {
-    console.warn("[pi-box] model resolve:", resolved.error);
-  } else {
-    console.log(
-      `[pi-box] model ${resolved.model?.provider || "openrouter"}/${resolved.model?.id || DEFAULT_MODEL}`,
-    );
-  }
-  const loader = new mod.DefaultResourceLoader({
-    cwd: CWD,
-    agentDir: AGENT_DIR,
-    skillsOverride: (current) => ({
-      skills: [
-        ...current.skills,
-        ...toPiSkills(catalog),
-      ],
-      diagnostics: current.diagnostics,
-    }),
-  });
-  await loader.reload();
-  const { session } = await mod.createAgentSession({
-    cwd: CWD,
-    agentDir: AGENT_DIR,
-    sessionManager: await diskSessionManager(mod, id),
-    modelRuntime,
-    resourceLoader: loader,
-    model: resolved.model,
-    thinkingLevel: resolved.thinkingLevel || "medium",
-    tools: ["read", "bash", "edit", "write", "ls", "grep", "find"],
-  });
-  const wrapped = { kind: "pi", id, session };
-  sessions.set(id, wrapped);
-  return wrapped;
-}
-
-async function runMock(res, message) {
-  sseWrite(res, "status", { state: "mock", reason: piLoadError ? "sdk" : "no-api-key" });
-  const live = catalog.filter((s) => s.available).map((s) => s.name);
-  sseWrite(res, "tool", {
-    id: "t-skills",
-    name: "skills",
-    status: "start",
-    args: { list: true },
-  });
-  await new Promise((r) => setTimeout(r, 120));
-  sseWrite(res, "tool", {
-    id: "t-skills",
-    name: "skills",
-    status: "end",
-    isError: false,
-    output: live.length ? live.join(", ") : "(none available on this host)",
-  });
-  const text =
-    `Mock mode — no model key, so Pi did not run.\n\n` +
-    `You said: ${message}\n\n` +
-    `Skills on this box: ${live.join(", ") || "none live"}. ` +
-    `Unavailable: ${catalog.filter((s) => !s.available).map((s) => s.name).join(", ") || "none"}.\n\n` +
-    `Set OPENROUTER_API_KEY (or ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY) and restart for a real Pi loop.`;
-  for (const chunk of text.split(/(\s+)/)) {
-    if (!chunk) continue;
-    sseWrite(res, "text", { delta: chunk });
-    await new Promise((r) => setTimeout(r, 8));
-  }
-  sseWrite(res, "done", { mock: true });
-}
-
-async function runPi(wrapped, res, message) {
-  sseWrite(res, "status", { state: "pi" });
-  const { session } = wrapped;
-  const unsub = session.subscribe((event) => {
-    try {
-      if (event.type === "message_update") {
-        const inner = event.assistantMessageEvent;
-        if (inner?.type === "text_delta" && inner.delta) {
-          sseWrite(res, "text", { delta: inner.delta });
-        }
-      } else if (event.type === "tool_execution_start") {
-        sseWrite(res, "tool", {
-          id: event.toolCallId || event.toolName,
-          name: event.toolName,
-          status: "start",
-          args: event.args ?? event.toolCall?.arguments ?? undefined,
-        });
-      } else if (event.type === "tool_execution_update") {
-        sseWrite(res, "tool", {
-          id: event.toolCallId || event.toolName,
-          name: event.toolName,
-          status: "update",
-          output: event.delta || event.output,
-        });
-      } else if (event.type === "tool_execution_end") {
-        sseWrite(res, "tool", {
-          id: event.toolCallId || event.toolName,
-          name: event.toolName,
-          status: "end",
-          isError: Boolean(event.isError),
-        });
-      }
-    } catch (err) {
-      console.error("[pi-box] sse event failed", err);
-    }
-  });
-  try {
-    await session.prompt(message);
-  } finally {
-    unsub();
-  }
-  sseWrite(res, "done", { mock: false });
 }
 
 function readBody(req) {
@@ -292,13 +77,13 @@ const server = http.createServer(async (req, res) => {
   if (await handlePluginsHttp(req, res, url)) return;
   if (await handleBrowserHttp(req, res, url)) return;
 
-  if (!capabilities) await refreshCatalog();
+  if (!runtime.capabilities()) await runtime.refreshCatalog();
 
   if (url.pathname === "/healthz") {
     json(res, 200, {
       ok: true,
-      pi: Boolean(await loadPi()),
-      mock: !hasProviderKey() || Boolean(piLoadError),
+      pi: Boolean(await runtime.loadPi()),
+      mock: !hasProviderKey() || Boolean(runtime.piLoadError()),
       model: DEFAULT_MODEL,
       box: thisBox(),
     });
@@ -318,13 +103,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/api/skills") {
-    await refreshCatalog();
-    json(res, 200, { skills: catalog.map(publicSkill) });
+    await runtime.refreshCatalog();
+    json(res, 200, { skills: runtime.catalog().map(publicSkill) });
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/api/boxes") {
-    await refreshCatalog();
+    await runtime.refreshCatalog();
     json(res, 200, { boxes: [thisBox()] });
     return;
   }
@@ -357,9 +142,11 @@ const server = http.createServer(async (req, res) => {
     });
 
     try {
-      const wrapped = await getSession(String(sessionId));
-      if (wrapped.kind === "mock") await runMock(res, message);
-      else await runPi(wrapped, res, message);
+      await runtime.runTurn({
+        sessionId: String(sessionId),
+        message,
+        emit: (event, data) => sseWrite(res, event, data),
+      });
     } catch (err) {
       console.error("[pi-box] chat failed", err);
       sseWrite(res, "error", { message: err?.message || String(err) });
@@ -372,8 +159,10 @@ const server = http.createServer(async (req, res) => {
   json(res, 404, { error: "not found" });
 });
 
-refreshCatalog()
+runtime
+  .refreshCatalog()
   .then(() => {
+    const catalog = runtime.catalog();
     const live = catalog.filter((s) => s.available).map((s) => s.name);
     console.log(
       `[pi-box] skills: ${catalog.map((s) => s.name).join(", ") || "(none)"} (live: ${live.join(", ") || "none"})`,

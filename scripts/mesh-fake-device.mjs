@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Join the mesh as a fake sidecar. Usage:
+ * Test sidecar only. Production join path is `pi-box node` (bin/pi-box.mjs).
+ * Usage:
  *   node scripts/mesh-fake-device.mjs --origin http://127.0.0.1:8787 --name ryzen-box
  *   node scripts/mesh-fake-device.mjs --ios-nack
  */

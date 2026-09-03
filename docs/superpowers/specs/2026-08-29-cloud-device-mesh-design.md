@@ -103,9 +103,11 @@ Reject a job with `NACK { unsatisfied: ["ios"] }` if a tool/skill needed this tu
 
 ### 4. Desktop app (Electron)
 
-Targets for v1: macOS (arm64/x64), Linux x64 (the Ryzen box, Steam Deck), Linux arm64 (Raspberry Pi, some Minis-as-Linux). Window loads the hosted UI (`https://pi-box.ahmad-096.workers.dev` or a configured origin). Side process is the sidecar. Login is the existing password page or Clerk. After login the app stores the device secret in the platform keychain and keeps the sidecar alive while signed in.
+Targets for v1: macOS (arm64/x64), Linux x64 (the Ryzen box, Steam Deck). Window loads the hosted UI (`https://pi-box.ahmad-096.workers.dev` or a configured origin). Side process is the sidecar. Login is the existing password page or Clerk. After login the app stores the device secret in the platform keychain and keeps the sidecar alive while signed in.
 
-`pi-box node` is the same sidecar without a window, for a Pi that sits in a drawer.
+Raspberry Pi and other Linux arm64 servers run headless `pi-box node` only. Do not ship an Electron GUI targeting a 4GB Pi.
+
+`pi-box node` is the same sidecar without a window.
 
 ### 5. Cloud runtime
 
@@ -277,7 +279,7 @@ Do not require a real Mac or 3090 in CI.
 2. **Placement on `/api/chat`.** Lease to `cloud` or a live sidecar. NACK/requeue. Skill availability from roster.
 3. **R2 snapshots.** Restore on the claiming runtime. Raise size cap. Dual-write DO + R2 until cutover.
 4. **`pi-box node` CLI** so a Linux box or Pi can join without Electron.
-5. **Electron app** (login, keychain, sidecar lifecycle) for Mini / MacBook / Deck / Linux desktop.
+5. **Electron app** (login, keychain, sidecar lifecycle) for Mini / MacBook / Deck / Linux desktop (x64). Pi stays headless.
 6. **Drain + affinity polish.** GPU/inference as an advertised cap, still not a separate scheduler.
 
 Each phase merges to main and can ship on the existing Worker. Phase 1 is useful alone.

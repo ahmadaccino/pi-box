@@ -15,6 +15,8 @@ import {
 } from "./password.mjs";
 import { MeshStore } from "../src/mesh-state.ts";
 import { handleMeshRequest, isDeviceTokenPath, isMeshDevicePath } from "../src/mesh-http.ts";
+import { failSseBody, planChatTurn, sseChunk, waitingSseBody } from "../src/mesh-chat.ts";
+import { sanitizeSession } from "../src/password.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicDir = path.join(root, "public");
@@ -32,6 +34,8 @@ try {
 }
 
 const mesh = new MeshStore();
+const snapshots = new Map();
+const pending = new Map();
 const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -74,6 +78,29 @@ function sendJson(res, code, body, headers = {}) {
   res.end(JSON.stringify(body));
 }
 
+function writePending(jobId, event, data) {
+  const res = pending.get(jobId);
+  if (!res) return;
+  res.write(sseChunk(event, data));
+}
+
+function writeRaw(jobId, body) {
+  const res = pending.get(jobId);
+  if (!res) return;
+  res.write(body);
+}
+
+function closePending(jobId) {
+  const res = pending.get(jobId);
+  pending.delete(jobId);
+  if (!res) return;
+  try {
+    res.end();
+  } catch {
+    /* already closed */
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
   const https = url.protocol === "https:";
@@ -111,7 +138,8 @@ const server = http.createServer(async (req, res) => {
     (url.pathname.startsWith("/api/") || url.pathname === "/healthz") &&
     url.pathname !== "/api/config" &&
     !url.pathname.startsWith("/api/oauth/google/callback") &&
-    !isDeviceTokenPath(url.pathname)
+    !isDeviceTokenPath(url.pathname) &&
+    !(req.headers["x-pi-box-device"] && /^\/api\/sessions\/[^/]+\/snapshot$/.test(url.pathname))
   ) {
     if (!verifyAuthCookie(req.headers.cookie, password)) {
       sendJson(res, 401, { error: "unauthorized" });
@@ -144,11 +172,138 @@ const server = http.createServer(async (req, res) => {
       meshId: "default",
       now: Date.now(),
       browser: true,
+      onDeviceEvent: (jobId, event, data) => writePending(jobId, event, data),
+      onDeviceAck: async (jobId, deviceId) => {
+        writePending(jobId, "status", { state: "pi", runtime: deviceId });
+        writePending(jobId, "done", { mock: false, runtime: deviceId });
+        closePending(jobId);
+      },
+      replaceJob: async (job) => {
+        const next = planChatTurn(mesh, {
+          sessionId: job.sessionId,
+          require: job.require,
+          prefer: job.prefer,
+          affinity: null,
+          payload: job.payload,
+          jobId: job.id,
+          now: Date.now(),
+        });
+        if (next.decision.wait) {
+          writeRaw(job.id, waitingSseBody(next.job));
+          closePending(job.id);
+        }
+      },
     });
     const outHeaders = Object.fromEntries(upstream.headers);
     res.writeHead(upstream.status, outHeaders);
     const buf = Buffer.from(await upstream.arrayBuffer());
     res.end(buf);
+    return;
+  }
+
+  if (/^\/api\/sessions\/[^/]+\/snapshot$/.test(url.pathname)) {
+    const sessionId = sanitizeSession(url.pathname.split("/")[3] || "");
+    if (req.method === "GET") {
+      const body = snapshots.get(sessionId);
+      if (!body) {
+        sendJson(res, 404, { error: "no_pointer" });
+        return;
+      }
+      sendJson(res, 200, body);
+      return;
+    }
+    if (req.method === "PUT") {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      try {
+        snapshots.set(sessionId, JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
+      } catch {
+        sendJson(res, 400, { error: "invalid json" });
+        return;
+      }
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    sendJson(res, 405, { error: "method not allowed" });
+    return;
+  }
+
+  if (url.pathname === "/api/chat" && req.method === "POST") {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const raw = Buffer.concat(chunks).toString("utf8") || "{}";
+    let body = {};
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      sendJson(res, 400, { error: "invalid json" });
+      return;
+    }
+    const sessionId = sanitizeSession(
+      url.searchParams.get("session") || req.headers["x-pi-box-session"] || body.session,
+    );
+    mesh.sweep(Date.now());
+    const planned = planChatTurn(mesh, {
+      sessionId,
+      message: body.message,
+      require: body.require,
+      now: Date.now(),
+      payload: { message: body.message, raw, sessionId },
+    });
+    const { job, decision } = planned;
+    if (decision.wait) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache",
+        "x-pi-box-runtime": "waiting",
+      });
+      res.end(waitingSseBody(job));
+      return;
+    }
+    if (decision.fail || !decision.deviceId) {
+      mesh.fail(job.id);
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "x-pi-box-runtime": "none",
+      });
+      res.end(failSseBody("no_capacity"));
+      return;
+    }
+    if (decision.deviceId !== "cloud") {
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache",
+        "x-pi-box-runtime": decision.deviceId,
+        "x-pi-box-session": sessionId,
+      });
+      pending.set(job.id, res);
+      res.write(sseChunk("status", { state: "pi", runtime: decision.deviceId }));
+      return;
+    }
+    try {
+      const target = `http://127.0.0.1:${AGENT_PORT}${url.pathname}${url.search}`;
+      const headers = new Headers(req.headers);
+      headers.delete("host");
+      headers.set("content-type", "application/json");
+      const upstream = await fetch(target, { method: "POST", headers, body: raw });
+      res.writeHead(upstream.status, {
+        ...Object.fromEntries(upstream.headers),
+        "x-pi-box-runtime": "cloud",
+      });
+      if (upstream.body) {
+        const reader = upstream.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+      }
+      res.end();
+      mesh.ack({ jobId: job.id, deviceId: "cloud", now: Date.now() });
+    } catch (err) {
+      mesh.fail(job.id, "cloud");
+      sendJson(res, 502, { error: "agent not ready", detail: err?.message });
+    }
     return;
   }
 
