@@ -5,3 +5,7 @@ dist/
 *.log
 .DS_Store
 container/node_modules/
+desktop/node_modules/
+desktop/dist/
+.pi-agent/
+.pi-box/

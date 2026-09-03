@@ -1,5 +1,11 @@
 FROM node:24-bookworm-slim
 
+# Cloud runtime image for the PiBox container (device id `cloud`).
+# Includes the mesh-era sidecar: Browser Rendering CDP, vault snapshots, skills,
+# and device helpers used when the Worker dispatches work here.
+# Deploy must rebuild this image (`npx wrangler deploy`). Do not ship Worker-only
+# with `--containers-rollout=none` after sidecar changes.
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bash ca-certificates git ripgrep \
   && rm -rf /var/lib/apt/lists/*

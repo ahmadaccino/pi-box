@@ -121,6 +121,7 @@ function deviceCapsLine(device) {
   if (c.os || c.platform) bits.push(c.os || c.platform);
   if (c.arch) bits.push(c.arch);
   if (c.gpu && c.gpu !== "none") bits.push(c.gpu);
+  if ((c.features || []).includes("inference")) bits.push("inference");
   const flags = ["browser", "ios", "android", "cloud"].filter((k) => c[k] === true);
   bits.push(...flags);
   const inflight = `${device.inflight || 0}/${device.inflightCap || 1}`;
@@ -145,6 +146,26 @@ function renderMachines(devices) {
     const state = device.drain ? "drain" : device.online ? "online" : "offline";
     body.append(el("span", "name", `${device.name || device.id} · ${state}`));
     body.append(el("span", "caps", deviceCapsLine(device)));
+    if (device.id && device.id !== "cloud") {
+      const actions = el("div", "machine-actions");
+      if (!device.drain) {
+        const drainBtn = el("button", "ghost tiny", "Drain");
+        drainBtn.type = "button";
+        drainBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          drainDevice(device.id);
+        });
+        actions.append(drainBtn);
+      }
+      const delBtn = el("button", "ghost tiny", "Remove");
+      delBtn.type = "button";
+      delBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        deleteDevice(device.id);
+      });
+      actions.append(delBtn);
+      body.append(actions);
+    }
     row.append(body);
     machinesEl.append(row);
   }
@@ -158,6 +179,35 @@ async function loadMachines() {
     renderMachines(data.devices || []);
   } catch {
     /* machines pane is optional on older sidecars */
+  }
+}
+
+async function drainDevice(id) {
+  try {
+    await fetch(`/api/devices/${encodeURIComponent(id)}/drain`, {
+      method: "POST",
+      headers: await authHeader(),
+    });
+  } finally {
+    await loadMachines();
+  }
+}
+
+async function deleteDevice(id) {
+  try {
+    const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: await authHeader(),
+    });
+    if (res.status === 409) {
+      await drainDevice(id);
+      await fetch(`/api/devices/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: await authHeader(),
+      });
+    }
+  } finally {
+    await loadMachines();
   }
 }
 

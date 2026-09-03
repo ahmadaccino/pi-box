@@ -42,7 +42,8 @@ export async function detectCapabilities() {
   if (ios) features.push("ios-simulator");
   if (android) features.push("android");
   if (gpu === "nvidia") features.push("cuda");
-  if (gpu === "nvidia") features.push("inference");
+  const inferenceUrl = process.env.PI_BOX_INFERENCE_URL || "";
+  if (gpu === "nvidia" || inferenceUrl) features.push("inference");
   return {
     bash: true,
     files: true,

@@ -74,4 +74,36 @@ const skills = [
   assert.equal(union.find((s) => s.name === "ios-simulator").available, false);
 }
 
+{
+  const store = new MeshStore();
+  const linuxId = store.register({
+    meshId: "default",
+    name: "ryzen-box",
+    caps: { os: "linux", ramGb: 128, ios: false, browser: true, gpu: "nvidia" },
+    tokenHash: "ab",
+    now: NOW,
+    uuid: "11111111-1111-4111-8111-111111111111",
+  }).deviceId;
+  store.register({
+    meshId: "default",
+    name: "mac-mini",
+    caps: { os: "darwin", ramGb: 32, ios: true, browser: true },
+    tokenHash: "cd",
+    now: NOW,
+    uuid: "22222222-2222-4222-8222-222222222222",
+  });
+  const first = planChatTurn(store, {
+    sessionId: "sticky-1",
+    now: NOW,
+    affinity: linuxId,
+  });
+  assert.equal(first.decision.deviceId, linuxId);
+  store.ack({ jobId: first.job.id, deviceId: linuxId, now: NOW + 1 });
+  const second = planChatTurn(store, {
+    sessionId: "sticky-1",
+    now: NOW + 2,
+  });
+  assert.equal(second.decision.deviceId, linuxId);
+}
+
 console.log("ok mesh-chat-check");

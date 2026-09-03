@@ -264,6 +264,12 @@ export class MeshStore {
     return this.data.placement[sessionId];
   }
 
+  inbox(deviceId: string): Job[] {
+    return Object.values(this.data.jobs).filter(
+      (job) => job.state === "leased" && job.leasedTo === deviceId,
+    );
+  }
+
   private incInflight(deviceId: string) {
     const device = this.data.devices[deviceId];
     if (device) device.inflight += 1;
