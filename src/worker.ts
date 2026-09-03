@@ -25,6 +25,7 @@ import {
 import { Mesh } from "./mesh";
 import { isDeviceTokenPath, isMeshDevicePath } from "./mesh-http";
 import { parseMeshId } from "./mesh-state";
+import { fetchPrettyAsset } from "./pretty-asset";
 
 export { Mesh };
 
@@ -428,17 +429,8 @@ export default {
       return container.fetch(request);
     }
 
-    if (url.pathname === "/vault") {
-      return workerEnv.ASSETS.fetch(
-        new Request(new URL("/vault.html" + url.search, request.url), request),
-      );
-    }
-
-    if (url.pathname === "/plugins") {
-      return workerEnv.ASSETS.fetch(
-        new Request(new URL("/plugins.html" + url.search, request.url), request),
-      );
-    }
+    const prettyPage = await fetchPrettyAsset(workerEnv.ASSETS, request);
+    if (prettyPage) return prettyPage;
 
     return workerEnv.ASSETS.fetch(request);
   },
