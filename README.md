@@ -31,6 +31,7 @@ Shipped packs:
 - **cloudflare** — `api.cloudflare.com` plus a publish-site skill (wrangler uses the vault token only)
 - **android-device** — adb / Argent. Not a Cloudflare container.
 - **ios-simulator** — Mac + Xcode (or Argent). Linux and Cloudflare will never boot a simulator.
+- **routines** — saved prompts on a cron or webhook. The agent can create them from chat. Panel: `/routines`. Details: [docs/routines.md](docs/routines.md).
 
 Open `/plugins` to Authenticate. Google OAuth redirect URIs:
 
@@ -140,7 +141,7 @@ npx wrangler secret put CLOUDFLARE_API_TOKEN
 npx wrangler deploy
 ```
 
-`npx wrangler deploy` **rebuilds the container image**. After sidecar/Dockerfile/plugin changes do **not** use `--containers-rollout=none` (Worker-only). `CLOUDFLARE_API_TOKEN` is never committed. Optional: `CLOUDFLARE_ACCOUNT_ID` (defaults to the pi-box account used in docs).
+`npx wrangler deploy` **rebuilds the container image**. After sidecar/Dockerfile/plugin changes do **not** use `--containers-rollout=none` (Worker-only). Routines scheduling, webhooks, and the `/routines` page ship in the Worker. The routines skill, the localhost tool proxy, and the recurring-task system note ship in the container image, so a routines deploy needs the image rebuild. Set `PI_BOX_PUBLIC_URL` to the Worker origin so the cloud computer can call Mesh. `CLOUDFLARE_API_TOKEN` is never committed. Optional: `CLOUDFLARE_ACCOUNT_ID` (defaults to the pi-box account used in docs).
 
 ## License
 

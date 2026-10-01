@@ -25,6 +25,7 @@ import {
 import { Mesh } from "./mesh";
 import { isDeviceTokenPath, isMeshDevicePath } from "./mesh-http";
 import { parseMeshId } from "./mesh-state";
+import { isRoutinesApiPath, routineWebhookMeshId } from "./routines";
 import { fetchPrettyAsset } from "./pretty-asset";
 
 export { Mesh };
@@ -368,6 +369,54 @@ export default {
       } catch {
         return json({ ok: true, product: "pi-box", box: "starting" });
       }
+    }
+
+    if (isRoutinesApiPath(url.pathname)) {
+      const webhookMesh =
+        request.method === "POST" ? routineWebhookMeshId(url.pathname) : null;
+      if (webhookMesh) {
+        const headers = new Headers(request.headers);
+        headers.set("x-pi-box-mesh", webhookMesh);
+        headers.set("x-pi-box-actor", "webhook");
+        return meshOf(workerEnv, webhookMesh).fetch(new Request(request, { headers }));
+      }
+      const deviceId = request.headers.get("x-pi-box-device") || "";
+      if (deviceId) {
+        const meshId = parseMeshId(deviceId);
+        if (!meshId) return new Response("Unauthorized", { status: 401 });
+        const headers = new Headers(request.headers);
+        headers.set("x-pi-box-actor", "device");
+        headers.set("x-pi-box-mesh", meshId);
+        return meshOf(workerEnv, meshId).fetch(new Request(request, { headers }));
+      }
+      if (request.headers.get("x-pi-box-sidecar") === "1") {
+        const token = workerEnv.GATEWAY_TOKEN || "";
+        const internal = request.headers.get("x-pi-box-internal") || "";
+        const open =
+          !token && !workerEnv.PI_BOX_PASSWORD && !workerEnv.CLERK_SECRET_KEY;
+        if (token) {
+          if (!timingSafeEqual(internal, token)) {
+            return new Response("Unauthorized", { status: 401 });
+          }
+        } else if (!open) {
+          return new Response("Unauthorized", { status: 401 });
+        }
+        const meshId = sanitizeSession(request.headers.get("x-pi-box-mesh"));
+        const headers = new Headers(request.headers);
+        headers.set("x-pi-box-actor", "user");
+        headers.set("x-pi-box-mesh", meshId);
+        return meshOf(workerEnv, meshId).fetch(new Request(request, { headers }));
+      }
+      const routinesUser = await requireUser(request, workerEnv);
+      if (!routinesUser) return new Response("Unauthorized", { status: 401 });
+      if (!gatewayOk(request, url, workerEnv)) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+      const routinesMesh = stableBoxId(routinesUser);
+      const headers = new Headers(request.headers);
+      headers.set("x-pi-box-actor", "user");
+      headers.set("x-pi-box-mesh", routinesMesh);
+      return meshOf(workerEnv, routinesMesh).fetch(new Request(request, { headers }));
     }
 
     if (isMeshDevicePath(url.pathname) || isMeshChatPath(url.pathname)) {

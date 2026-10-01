@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createAgentRuntime } from "./agent.mjs";
+import { startDeviceRoutinesProxy } from "./routines-proxy.mjs";
 import {
   ackJob,
   connectJobs,
@@ -262,6 +263,7 @@ export async function runNode(input = {}) {
   }
   const deviceId = identity.deviceId;
   const deviceSecret = identity.deviceSecret;
+  const routinesProxy = startDeviceRoutinesProxy({ origin, deviceId, deviceSecret });
 
   const transport = {
     ws: null,
@@ -350,6 +352,11 @@ export async function runNode(input = {}) {
     caps,
     stop() {
       clearInterval(poll);
+      try {
+        routinesProxy.close();
+      } catch {
+        /* ignore */
+      }
       try {
         transport.ws?.close();
       } catch {

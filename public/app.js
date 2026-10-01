@@ -409,6 +409,7 @@ async function loadBoxes() {
   const saved = localStorage.getItem("pi-box-session");
   selectBox(saved && boxes.some((b) => b.id === saved) ? saved : boxes[0]?.id);
   await loadMachines();
+  await pollRoutineFeed();
 }
 
 function showApp() {
@@ -497,5 +498,46 @@ async function boot() {
   }
 }
 
+function readSeenRoutines() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("pi-box-routine-seen") || "[]");
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+const seenRoutines = readSeenRoutines();
+
+function rememberRoutine(id) {
+  seenRoutines.add(id);
+  localStorage.setItem("pi-box-routine-seen", JSON.stringify([...seenRoutines].slice(-200)));
+}
+
+async function pollRoutineFeed() {
+  if (!log || app.hidden) return;
+  try {
+    const res = await fetch(`/api/routines/feed?session=${encodeURIComponent(chatSession)}`, {
+      headers: await authHeader(),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const fresh = (data.notices || [])
+      .filter((notice) => notice?.id && !seenRoutines.has(notice.id))
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    for (const notice of fresh) {
+      rememberRoutine(notice.id);
+      const wrap = el("article", "msg assistant");
+      wrap.append(el("div", "who", "routine"));
+      wrap.append(el("div", "bubble", notice.text || ""));
+      log.append(wrap);
+    }
+    if (fresh.length) log.scrollTop = log.scrollHeight;
+  } catch {
+    /* feed is optional until the mesh is up */
+  }
+}
+
 boot();
 setInterval(loadMachines, 15000);
+setInterval(pollRoutineFeed, 10000);

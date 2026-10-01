@@ -11,6 +11,7 @@ import { handlePluginsHttp } from "./plugins.mjs";
 import { handleSnapshotHttp } from "./snapshot.mjs";
 import { handleGoogleOAuthHttp } from "./google-oauth.mjs";
 import { createAgentRuntime, hasProviderKey } from "./agent.mjs";
+import { handleRoutinesProxy, rememberRoutinesRoute } from "./routines-proxy.mjs";
 
 const PORT = Number(process.env.PORT || 8788);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -60,6 +61,8 @@ function json(res, code, body) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  rememberRoutinesRoute(req);
+  if (await handleRoutinesProxy(req, res, url)) return;
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
     "Access-Control-Allow-Headers",

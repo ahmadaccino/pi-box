@@ -17,6 +17,14 @@ import { MeshStore } from "../src/mesh-state.ts";
 import { handleMeshRequest, isDeviceTokenPath, isMeshDevicePath } from "../src/mesh-http.ts";
 import { failSseBody, planChatTurn, sseChunk, waitingSseBody } from "../src/mesh-chat.ts";
 import { sanitizeSession } from "../src/password.ts";
+import {
+  RoutineBook,
+  appendRoutineTranscript,
+  assistantTextFromSse,
+  claimDueRoutines,
+  finishRoutineRun,
+  handleRoutinesRequest,
+} from "../src/routines.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicDir = path.join(root, "public");
@@ -34,6 +42,7 @@ try {
 }
 
 const mesh = new MeshStore();
+const routines = new RoutineBook();
 const snapshots = new Map();
 const pending = new Map();
 const types = {
@@ -138,6 +147,9 @@ const server = http.createServer(async (req, res) => {
     (url.pathname.startsWith("/api/") || url.pathname === "/healthz") &&
     url.pathname !== "/api/config" &&
     !url.pathname.startsWith("/api/oauth/google/callback") &&
+    !/^\/api\/routines\/rt\.[^/]+\/webhook$/.test(url.pathname) &&
+    !(req.headers["x-pi-box-sidecar"] === "1" && url.pathname.startsWith("/api/routines")) &&
+    !(req.headers["x-pi-box-device"] && url.pathname.startsWith("/api/routines")) &&
     !isDeviceTokenPath(url.pathname) &&
     !(req.headers["x-pi-box-device"] && /^\/api\/sessions\/[^/]+\/snapshot$/.test(url.pathname))
   ) {
@@ -172,8 +184,14 @@ const server = http.createServer(async (req, res) => {
       meshId: "default",
       now: Date.now(),
       browser: true,
-      onDeviceEvent: (jobId, event, data) => writePending(jobId, event, data),
+      onDeviceEvent: (jobId, event, data) => {
+        if (event === "text" && data && typeof data === "object" && data.delta) {
+          appendRoutineTranscript(routines, jobId, String(data.delta));
+        }
+        writePending(jobId, event, data);
+      },
       onDeviceAck: async (jobId, deviceId) => {
+        finishRoutineRun(routines, mesh, jobId, { status: "succeeded", now: Date.now() });
         writePending(jobId, "status", { state: "pi", runtime: deviceId });
         writePending(jobId, "done", { mock: false, runtime: deviceId });
         closePending(jobId);
@@ -242,6 +260,7 @@ const server = http.createServer(async (req, res) => {
     const sessionId = sanitizeSession(
       url.searchParams.get("session") || req.headers["x-pi-box-session"] || body.session,
     );
+    routines.rememberSession(sessionId);
     mesh.sweep(Date.now());
     const planned = planChatTurn(mesh, {
       sessionId,
@@ -307,6 +326,39 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname.startsWith("/api/routines")) {
+    const chunks = [];
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      for await (const c of req) chunks.push(c);
+    }
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (v) headers.set(k, Array.isArray(v) ? v.join(", ") : v);
+    }
+    if (!headers.get("x-pi-box-actor")) headers.set("x-pi-box-actor", "user");
+    headers.set("x-pi-box-mesh", headers.get("x-pi-box-mesh") || "default");
+    const request = new Request(`http://127.0.0.1:${UI_PORT}${url.pathname}${url.search}`, {
+      method: req.method,
+      headers,
+      body: chunks.length ? Buffer.concat(chunks) : undefined,
+    });
+    const claimed = [];
+    const upstream = await handleRoutinesRequest({
+      book: routines,
+      store: mesh,
+      request,
+      meshId: "default",
+      now: Date.now(),
+      origin: `http://127.0.0.1:${UI_PORT}`,
+      onClaim: (run) => claimed.push(run),
+    });
+    for (const run of claimed) void dispatchRoutine(run);
+    const outHeaders = Object.fromEntries(upstream.headers);
+    res.writeHead(upstream.status, outHeaders);
+    res.end(Buffer.from(await upstream.arrayBuffer()));
+    return;
+  }
+
   if (url.pathname.startsWith("/api/") || url.pathname === "/healthz") {
     const target = `http://127.0.0.1:${AGENT_PORT}${url.pathname}${url.search}`;
     try {
@@ -344,6 +396,7 @@ const server = http.createServer(async (req, res) => {
   let rel = url.pathname === "/" ? "/index.html" : url.pathname;
   if (rel === "/vault") rel = "/vault.html";
   if (rel === "/plugins") rel = "/plugins.html";
+  if (rel === "/routines") rel = "/routines.html";
   const filePath = path.normalize(path.join(publicDir, rel));
   if (!filePath.startsWith(publicDir)) {
     res.writeHead(403);
@@ -363,6 +416,53 @@ const server = http.createServer(async (req, res) => {
     }
   }
 });
+
+async function dispatchRoutine(claimed) {
+  if (claimed.decision?.wait || claimed.decision?.fail || !claimed.decision?.deviceId) {
+    finishRoutineRun(routines, mesh, claimed.jobId, {
+      status: claimed.decision?.wait ? "waiting" : "failed",
+      error: claimed.decision?.wait ? "waiting for a matching machine" : "no_capacity",
+      now: Date.now(),
+    });
+    return;
+  }
+  if (claimed.decision.deviceId !== "cloud") return;
+  try {
+    const upstream = await fetch(`http://127.0.0.1:${AGENT_PORT}/api/chat`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-pi-box-session": claimed.sessionId,
+        "x-pi-box-mesh": "default",
+        "x-pi-box-origin": `http://127.0.0.1:${UI_PORT}`,
+      },
+      body: JSON.stringify({ message: claimed.prompt, session: claimed.sessionId }),
+    });
+    const text = await upstream.text();
+    const assistant = assistantTextFromSse(text);
+    const failed = !upstream.ok || /(^|\n)event:\s*error/.test(text);
+    if (failed) mesh.fail(claimed.jobId, "cloud");
+    else mesh.ack({ jobId: claimed.jobId, deviceId: "cloud", now: Date.now() });
+    finishRoutineRun(routines, mesh, claimed.jobId, {
+      status: failed ? "failed" : "succeeded",
+      result: assistant,
+      error: failed ? "run failed" : "",
+      now: Date.now(),
+    });
+  } catch (err) {
+    mesh.fail(claimed.jobId, "cloud");
+    finishRoutineRun(routines, mesh, claimed.jobId, {
+      status: "failed",
+      error: err?.message || "cloud run failed",
+      now: Date.now(),
+    });
+  }
+}
+
+setInterval(() => {
+  const due = claimDueRoutines(routines, mesh, Date.now());
+  for (const run of due) void dispatchRoutine(run);
+}, 15_000);
 
 server.listen(UI_PORT, "127.0.0.1", () => {
   console.log(`[pi-box] ui http://127.0.0.1:${UI_PORT}`);

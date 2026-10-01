@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pi-box routines</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      body { display: grid; place-items: start center; padding: 48px 16px 80px; }
+      .plug-card { width: min(720px, 100%); background: var(--paper); border: 1px solid var(--line); padding: 28px 28px 32px; }
+      .plug-card h1 { margin: 12px 0 4px; font-size: 22px; }
+      .lede { color: var(--mute); margin: 0 0 22px; }
+      .nav { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+      .nav a { color: var(--mute); text-decoration: none; }
+      .nav a:hover { color: var(--amber); }
+      .tz {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 18px;
+      }
+      .tz label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+      .tz input, .create input, .create textarea, .create select {
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .tz input { flex: 1; }
+      .create { display: grid; gap: 8px; margin: 8px 0 18px; }
+      .create textarea { min-height: 72px; resize: vertical; }
+      .row {
+        padding: 14px 0;
+        border-top: 1px solid var(--line);
+      }
+      .row h2 { margin: 0; font-size: 16px; }
+      .meta { margin: 4px 0 8px; color: var(--mute); font-family: var(--mono); font-size: 12px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      button.ghost {
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        padding: 8px 12px;
+      }
+      .st { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+      .st.succeeded, .st.running { color: var(--ok); }
+      .st.failed { color: var(--bad); }
+      .st.waiting, .st.paused { color: var(--amber); }
+      .history { margin-top: 10px; }
+      .history pre {
+        margin: 6px 0 0;
+        white-space: pre-wrap;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--mute);
+      }
+      .secret {
+        margin-top: 8px;
+        padding: 8px 10px;
+        border: 1px solid var(--amber);
+        font-family: var(--mono);
+        font-size: 12px;
+        word-break: break-all;
+      }
+      #err { color: var(--bad); min-height: 1.2em; }
+    </style>
+  </head>
+  <body>
+    <div class="plug-card">
+      <span class="mark"></span>
+      <p class="nav"><a href="/">chat</a> · <a href="/vault">vault</a> · <a href="/plugins">plugins</a></p>
+      <h1>routines</h1>
+      <p class="lede">Saved prompts that run while you are away. Cron is evaluated in your timezone. A webhook calls the routine with a bearer key shown once.</p>
+      <form id="tz" class="tz">
+        <label for="timezone">timezone</label>
+        <input id="timezone" name="timezone" list="zones" placeholder="America/New_York" />
+        <datalist id="zones">
+          <option value="UTC"></option>
+          <option value="America/New_York"></option>
+          <option value="America/Chicago"></option>
+          <option value="America/Denver"></option>
+          <option value="America/Los_Angeles"></option>
+          <option value="Europe/London"></option>
+          <option value="Europe/Paris"></option>
+          <option value="Asia/Tokyo"></option>
+        </datalist>
+        <button type="submit" class="ghost">Save</button>
+      </form>
+      <form id="create" class="create">
+        <input id="name" placeholder="Name" required />
+        <textarea id="prompt" placeholder="Prompt to run" required></textarea>
+        <select id="trigger">
+          <option value="cron">Cron</option>
+          <option value="webhook">Webhook</option>
+        </select>
+        <input id="schedule" placeholder="0 9 * * 1-5 or @every 15m" />
+        <button type="submit">Create</button>
+      </form>
+      <p id="err"></p>
+      <div id="list">loading…</div>
+    </div>
+    <script src="/routines.js"></script>
+  </body>
+</html>
