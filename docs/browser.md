@@ -2,7 +2,17 @@
 
 Real browser sessions live in `container/browser.mjs`. The chat sidecar (`container/server.mjs`) mounts the HTTP handler. The browser skill teaches Pi the recipe; this doc is for operators.
 
-Coordinator (`web_search` / `web_fetch`) first. Browser only for a **known URL** that needs interaction. Search engines are rejected on `startUrl` / `goto`.
+Coordinator tools `web_search` and `web_fetch` run in the sidecar (`container/web-tools.mjs`). Browser only for a **known URL** that needs interaction. Search engines are rejected on `startUrl` / `goto`.
+
+Search provider, first match:
+
+- `BRAVE_API_KEY` or `BRAVE_SEARCH_API_KEY`
+- `TAVILY_API_KEY`
+- `EXA_API_KEY`
+- `SEARCH_PROVIDER` (`brave`, `tavily`, or `exa`) plus `SEARCH_API_KEY`
+- A vault token on plugin `web-search`, `brave`, `tavily`, or `exa` (`api_key`, `token`, or `key`; `provider` when the plugin id is `web-search`)
+
+No key: DuckDuckGo HTML. If that fails and `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN` (or `BROWSER_CDP_TOKEN`) are set, the same query is read through Cloudflare Browser Rendering `/markdown`. If that also fails, the tool result says search is unavailable. Keys are stripped from the bash tool environment.
 
 ## Local Playwright
 

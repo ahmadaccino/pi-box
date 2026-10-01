@@ -63,6 +63,13 @@ function containerProcessEnv(boxId: string): Record<string, string> {
     GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID ?? "",
     GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET ?? "",
     PI_BOX_PUBLIC_URL: env.PI_BOX_PUBLIC_URL ?? "",
+    CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID ?? "",
+    BRAVE_API_KEY: env.BRAVE_API_KEY ?? "",
+    BRAVE_SEARCH_API_KEY: env.BRAVE_SEARCH_API_KEY ?? "",
+    TAVILY_API_KEY: env.TAVILY_API_KEY ?? "",
+    EXA_API_KEY: env.EXA_API_KEY ?? "",
+    SEARCH_API_KEY: env.SEARCH_API_KEY ?? "",
+    SEARCH_PROVIDER: env.SEARCH_PROVIDER ?? "",
     PI_BOX_ID: "cloud",
     PI_BOX_NAME: "cloudflare",
     VAULT_ENCRYPTION_KEY: env.VAULT_ENCRYPTION_KEY ?? "",
@@ -171,6 +178,15 @@ type Env = {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   PI_BOX_PUBLIC_URL?: string;
+  BRAVE_API_KEY?: string;
+  BRAVE_SEARCH_API_KEY?: string;
+  TAVILY_API_KEY?: string;
+  EXA_API_KEY?: string;
+  SEARCH_API_KEY?: string;
+  SEARCH_PROVIDER?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
 };
 
 function json(body: unknown, init: ResponseInit = {}) {
@@ -251,6 +267,7 @@ export default {
         authRequired: Boolean(workerEnv.CLERK_SECRET_KEY),
         passwordRequired: Boolean(workerEnv.PI_BOX_PASSWORD),
         googleOAuth: googleConfigured(workerEnv),
+        pushPublicKey: workerEnv.VAPID_PUBLIC_KEY || "",
       });
     }
 

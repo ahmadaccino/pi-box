@@ -11,6 +11,9 @@ import { handlePluginsHttp } from "./plugins.mjs";
 import { handleSnapshotHttp } from "./snapshot.mjs";
 import { handleGoogleOAuthHttp } from "./google-oauth.mjs";
 import { handleApprovalsHttp } from "./approvals.mjs";
+import { handleAttachmentHttp } from "./attachments.mjs";
+import { handleCardsHttp } from "./cards.mjs";
+import { MAX_CHAT_BODY, parseChatBody } from "./chat-body.mjs";
 import { handleOutboxHttp } from "./outbox.mjs";
 import { handleSessionControl } from "./session-control.mjs";
 import { openLiveTurn } from "./live-turn.mjs";
@@ -44,6 +47,24 @@ function thisBox() {
     browser: browserPublicStatus(),
     skills: runtime.catalog().map(publicSkill),
   };
+}
+
+function readRaw(req, limit = MAX_CHAT_BODY) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let n = 0;
+    req.on("data", (chunk) => {
+      n += chunk.length;
+      if (n > limit) {
+        reject(Object.assign(new Error("body too large"), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
 }
 
 function readBody(req) {
@@ -85,6 +106,8 @@ const server = http.createServer(async (req, res) => {
   if (await handleSnapshotHttp(req, res, url)) return;
   if (await handleGoogleOAuthHttp(req, res, url)) return;
   if (await handleApprovalsHttp(req, res, url)) return;
+  if (await handleCardsHttp(req, res, url)) return;
+  if (await handleAttachmentHttp(req, res, url, { cwd: process.env.PI_CWD || "/workspace" })) return;
   if (await handleOutboxHttp(req, res, url)) return;
   if (await handleSessionControl(req, res, url, runtime)) return;
   if (VAULT_ROUTES && (await handleVaultHttp(req, res, url))) return;
@@ -112,6 +135,7 @@ const server = http.createServer(async (req, res) => {
       googleOAuth: Boolean(
         process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
       ),
+      pushPublicKey: process.env.VAPID_PUBLIC_KEY || "",
     });
     return;
   }
@@ -129,24 +153,22 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/api/chat") {
-    let body;
+    let raw;
     try {
-      body = await readBody(req);
-    } catch {
-      json(res, 400, { error: "invalid json" });
+      raw = await readRaw(req);
+    } catch (err) {
+      json(res, err.status || 400, { error: err.status === 413 ? "body too large" : "invalid body" });
       return;
     }
-    const message = String(body.message || "").trim();
-    if (!message) {
-      json(res, 400, { error: "message required" });
+    const sessionHint =
+      url.searchParams.get("session") || req.headers["x-pi-box-session"] || "";
+    const parsed = parseChatBody(raw, req.headers["content-type"] || "", { sessionId: sessionHint });
+    if (!parsed.ok) {
+      json(res, parsed.status || 400, { error: parsed.error || "invalid body" });
       return;
     }
-    const sessionId =
-      url.searchParams.get("session") ||
-      req.headers["x-pi-box-session"] ||
-      body.session ||
-      body.boxId ||
-      randomUUID();
+    const message = parsed.message;
+    const sessionId = sessionHint || parsed.session || randomUUID();
 
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
@@ -163,6 +185,7 @@ const server = http.createServer(async (req, res) => {
       await runtime.runTurn({
         sessionId: String(sessionId),
         message,
+        attachments: parsed.attachments,
         emit: (event, data) => sseWrite(res, event, data),
       });
     } catch (err) {

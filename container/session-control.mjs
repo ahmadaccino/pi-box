@@ -1,6 +1,7 @@
 /**
  * Stop and steer for the sidecar session that owns the running Pi turn.
  */
+import { prepareAttachments } from "./attachments.mjs";
 function json(res, code, body) {
   res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
@@ -43,7 +44,24 @@ export async function handleSessionControl(req, res, url, runtime) {
     json(res, 400, { error: "invalid json" });
     return true;
   }
-  const out = await runtime.steer(sessionId, body.message);
+  let message = body.message;
+  let images;
+  if (Array.isArray(body.attachments) && body.attachments.length) {
+    try {
+      const prepared = await prepareAttachments({
+        attachments: body.attachments,
+        cwd: process.env.PI_CWD || "/workspace",
+        agentDir: process.env.PI_CODING_AGENT_DIR || "/root/.pi/agent",
+        sessionId,
+      });
+      message = [String(body.message || "").trim(), prepared.note].filter(Boolean).join("\n\n");
+      images = prepared.images;
+    } catch (err) {
+      json(res, err.status || 400, { error: err.message || "bad attachment" });
+      return true;
+    }
+  }
+  const out = await runtime.steer(sessionId, message, images);
   json(res, out.ok ? 200 : out.error === "idle" ? 409 : 400, out);
   return true;
 }

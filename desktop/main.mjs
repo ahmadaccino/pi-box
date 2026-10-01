@@ -2,7 +2,7 @@
  * Electron main process. Window loads the hosted (or configured) UI.
  * After login, the device secret lives in the OS keychain and the sidecar stays up.
  */
-import { app, BrowserWindow, ipcMain, session } from "electron";
+import { app, BrowserWindow, ipcMain, Notification, session } from "electron";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import os from "node:os";
 import {
   KEYCHAIN_SERVICE,
   keychainAccount,
+  desktopNotice,
   resolveOrigin,
   sidecarArgs,
 } from "./logic.mjs";
@@ -159,6 +160,13 @@ function createWindow() {
 }
 
 ipcMain.handle("pi-box:origin", () => ORIGIN);
+
+ipcMain.handle("pi-box:notify", (_event, payload) => {
+  const note = desktopNotice(payload);
+  if (!Notification.isSupported()) return { ok: false, reason: "unsupported" };
+  new Notification({ title: note.title, body: note.body }).show();
+  return { ok: true };
+});
 
 app.whenReady().then(() => {
   createWindow();

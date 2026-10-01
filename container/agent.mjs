@@ -9,6 +9,8 @@ import { loadSkills, annotateAvailability, toPiSkills } from "./skills.mjs";
 import { detectCapabilities } from "./host.mjs";
 import { bashSpawnHook } from "./shell-env.mjs";
 import { attachToolGate, getApprovalGate } from "./approvals.mjs";
+import { prepareAttachments } from "./attachments.mjs";
+import { buildCustomTools } from "./pi-tools.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -52,10 +54,16 @@ export function seedAgentDir(agentDir, env = process.env) {
   } catch {
     existing = "";
   }
+  const toolsNote =
+    "\n\n## Chat tools\nUse web_search and web_fetch for the public web. Use ask_user when you need a decision; the tool result is the user's reply. Use send_attachment to hand a workspace file or image back as a download card.\n";
   if (!existing.includes("## Routines")) {
     const base = existing.trim() ? existing.replace(/\s*$/, "") : "# Agent";
-    fs.writeFileSync(notePath, base + routinesNote);
+    existing = base + routinesNote;
   }
+  if (!existing.includes("## Chat tools")) {
+    existing = existing.replace(/\s*$/, "") + toolsNote;
+  }
+  fs.writeFileSync(notePath, existing.endsWith("\n") ? existing : `${existing}\n`);
 }
 
 async function diskSessionManager(mod, sessionId, cwd, agentDir) {
@@ -164,6 +172,22 @@ export function createAgentRuntime(opts = {}) {
     });
     await loader.reload();
     const bashTool = piBashCustomTool(mod, cwd);
+    const bridge = {
+      cwd,
+      env: envOf(),
+      emit: () => {},
+    };
+    let extraTools = [];
+    try {
+      extraTools = await buildCustomTools(bridge);
+      if (typeof mod.defineTool === "function") {
+        extraTools = extraTools.map((tool) => mod.defineTool(tool));
+      }
+    } catch (err) {
+      console.warn("[pi-box] custom tools skipped", err?.message || err);
+      extraTools = [];
+    }
+    const customTools = [...(bashTool ? [bashTool] : []), ...extraTools];
     const { session } = await mod.createAgentSession({
       cwd,
       agentDir,
@@ -172,11 +196,20 @@ export function createAgentRuntime(opts = {}) {
       resourceLoader: loader,
       model: resolved.model,
       thinkingLevel: resolved.thinkingLevel || "medium",
-      tools: ["read", "bash", "edit", "write", "ls", "grep", "find"],
-      ...(bashTool ? { customTools: [bashTool] } : {}),
+      tools: [
+        "read",
+        "bash",
+        "edit",
+        "write",
+        "ls",
+        "grep",
+        "find",
+        ...extraTools.map((tool) => tool.name),
+      ],
+      ...(customTools.length ? { customTools } : {}),
     });
     attachToolGate(session, opts.gate || getApprovalGate());
-    const wrapped = { kind: "pi", id, session, running: false, aborted: false };
+    const wrapped = { kind: "pi", id, session, running: false, aborted: false, bridge };
     sessions.set(id, wrapped);
     return wrapped;
   }
@@ -216,7 +249,7 @@ export function createAgentRuntime(opts = {}) {
     emit("done", { mock: true, aborted: Boolean(wrapped.aborted) });
   }
 
-  async function runPi(wrapped, emit, message) {
+  async function runPi(wrapped, emit, message, images) {
     emit("status", { state: "pi" });
     const { session } = wrapped;
     const unsub = session.subscribe((event) => {
@@ -253,35 +286,51 @@ export function createAgentRuntime(opts = {}) {
       }
     });
     try {
-      await session.prompt(message);
+      const promptOpts = images?.length ? { images } : undefined;
+      await session.prompt(message, promptOpts);
     } finally {
       unsub();
     }
     emit("done", { mock: false });
   }
 
-  async function runTurn({ sessionId, message, emit }) {
+  async function composeTurn({ sessionId, message, attachments }) {
+    const prepared = await prepareAttachments({
+      attachments,
+      cwd: cwdOf(),
+      agentDir: agentDirOf(),
+      sessionId,
+    });
+    const text = [String(message || "").trim(), prepared.note].filter(Boolean).join("\n\n");
+    return { message: text, images: prepared.images };
+  }
+
+  async function runTurn({ sessionId, message, emit, attachments }) {
     if (!capabilities) await refreshCatalog();
     const wrapped = await getSession(String(sessionId));
+    const composed = await composeTurn({ sessionId, message, attachments });
     wrapped.running = true;
     wrapped.aborted = false;
     wrapped.emit = emit;
+    if (wrapped.bridge) wrapped.bridge.emit = emit;
     try {
-      if (wrapped.kind === "mock") await runMock(wrapped, emit, message);
-      else await runPi(wrapped, emit, message);
+      if (wrapped.kind === "mock") await runMock(wrapped, emit, composed.message);
+      else await runPi(wrapped, emit, composed.message, composed.images);
     } finally {
       wrapped.running = false;
       wrapped.emit = null;
+      if (wrapped.bridge) wrapped.bridge.emit = () => {};
     }
   }
 
-  async function steer(sessionId, message) {
+  async function steer(sessionId, message, images) {
     const text = String(message || "").trim();
     if (!text) return { ok: false, error: "message required" };
     const wrapped = sessions.get(String(sessionId));
     if (!wrapped?.running) return { ok: false, error: "idle" };
     if (wrapped.kind === "pi" && typeof wrapped.session?.steer === "function") {
-      await wrapped.session.steer(text);
+      if (images?.length) await wrapped.session.steer(text, images);
+      else await wrapped.session.steer(text);
       return { ok: true, steered: true };
     }
     wrapped.steers = wrapped.steers || [];

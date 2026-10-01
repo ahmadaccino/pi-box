@@ -5,7 +5,7 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const ROOTS = ["vault", "sessions"];
+const ROOTS = ["vault", "sessions", "uploads"];
 export const SNAPSHOT_DO = { maxFile: 2 * 1024 * 1024, maxFiles: 80 };
 export const SNAPSHOT_R2 = { maxFile: 32 * 1024 * 1024, maxFiles: 500 };
 const MAX_FILE = SNAPSHOT_DO.maxFile;

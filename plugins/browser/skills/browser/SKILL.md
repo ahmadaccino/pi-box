@@ -10,7 +10,7 @@ metadata: host=browser
 
 This skill is live only when the host reports `browser: true`.
 
-The **coordinator** (chat sidecar) does `web_search` / `web_fetch`. Open the browser only for a **known URL that needs interaction**. Never open a search engine (Google, Bing, DDG, etc.) in the browser.
+The **coordinator** (chat sidecar) has real `web_search` and `web_fetch` tools. `web_fetch` returns readable markdown. `web_search` uses Brave, Tavily, or Exa when a key is set, otherwise a keyless fallback or Cloudflare Browser Rendering. If search cannot run, the tool result says **Search is unavailable**. Open the browser only for a **known URL that needs interaction**. Never open a search engine (Google, Bing, DDG, etc.) in the browser.
 
 ## Session contract
 

@@ -46,6 +46,7 @@ export function fileDraft(fields) {
   };
   drafts.set(id, record);
   const preview = {
+    kind: "draft",
     type: "draft",
     title: "Ready to send",
     id: record.id,

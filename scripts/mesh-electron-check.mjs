@@ -5,6 +5,7 @@ import {
   KEYCHAIN_SERVICE,
   builderTargets,
   keychainAccount,
+  desktopNotice,
   sidecarArgs,
 } from "../desktop/logic.mjs";
 
@@ -31,5 +32,9 @@ assert.ok(args.includes("--origin"));
 assert.ok(args.includes("http://127.0.0.1:8787"));
 assert.ok(args.includes("--name"));
 assert.ok(args.includes("mac-mini"));
+assert.deepEqual(desktopNotice({ title: "Approval needed", body: "send the draft" }), {
+  title: "Approval needed",
+  body: "send the draft",
+});
 
 console.log("ok mesh-electron-check");

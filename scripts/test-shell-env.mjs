@@ -39,6 +39,12 @@ const secrets = {
   PI_BOX_DEVICE_SECRET: "device-secret-d4f1",
   PI_BOX_INTERNAL_TOKEN: "internal-token-d4f1",
   INTERNAL_API_SECRET: "internal-secret-d4f1",
+  BRAVE_API_KEY: "brave-secret-d4f1",
+  BRAVE_SEARCH_API_KEY: "brave-search-secret-d4f1",
+  TAVILY_API_KEY: "tavily-secret-d4f1",
+  EXA_API_KEY: "exa-secret-d4f1",
+  SEARCH_API_KEY: "search-secret-d4f1",
+  VAPID_PRIVATE_KEY: "vapid-secret-d4f1",
 };
 
 try {

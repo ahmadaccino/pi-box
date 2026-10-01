@@ -188,6 +188,7 @@ export async function handleDeviceJob(job, ctx) {
     await runtime.runTurn({
       sessionId: job.sessionId,
       message,
+      attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
       emit: (event, data) => sendEvent(job.id, event, data),
     });
     const collected = await collectSnapshot(agentDir, SNAPSHOT_R2);

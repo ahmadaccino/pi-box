@@ -11,9 +11,11 @@ export function composerView(running) {
   };
 }
 
-export function composerAction(running, message) {
+export function composerAction(running, message, extra) {
   const text = String(message || "").trim();
-  if (!text) return { type: "ignore" };
-  if (running) return { type: "steer", message: text };
-  return { type: "turn", message: text };
+  const attachments = Number(extra?.attachments || 0);
+  if (!text && attachments <= 0) return { type: "ignore" };
+  const body = text || "See the attached files.";
+  if (running) return { type: "steer", message: body };
+  return { type: "turn", message: body };
 }

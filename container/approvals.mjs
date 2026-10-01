@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { publishApproval, reviewToolCall } from "./actions.mjs";
+import { approvalCardEvent } from "./cards.mjs";
 import { emitLive, isUserConnected, subscribeConnection } from "./live-turn.mjs";
 
 export const APPROVAL_TTL_MS = 10 * 60 * 1000;
@@ -90,13 +91,15 @@ export function createApprovalGate(opts = {}) {
       return { decision: "allow", via: "rule", id: null };
     }
     const id = randomUUID();
-    emit("approval", {
+    const approval = {
       id,
       tool,
       target,
       summary,
       choices: ["allow_once", "always", "deny"],
-    });
+    };
+    emit("approval", approval);
+    emit("card", approvalCardEvent(approval));
     return new Promise((resolve) => {
       const entry = { id, tool, target, resolve, done: false, timer: null, unsub: null };
       pending.set(id, entry);

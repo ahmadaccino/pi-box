@@ -80,8 +80,10 @@ try {
   });
   assert.equal(expired.decision, "deny");
   assert.equal(expired.via, "expired");
-  assert.equal(events.length, 1);
+  assert.equal(events.length, 2, "legacy approval event plus shared card event");
   assert.deepEqual(events[0].choices, ["allow_once", "always", "deny"]);
+  assert.equal(events[1].kind, "approval");
+  assert.equal(events[1].id, events[0].id);
 
   const live = createConnectionFlag(true);
   const heldEvents = [];

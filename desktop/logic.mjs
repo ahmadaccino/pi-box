@@ -26,3 +26,10 @@ export function sidecarArgs({ origin, name, cookie, token, home } = {}) {
 export function resolveOrigin(env = process.env) {
   return env.PI_BOX_ORIGIN || DEFAULT_ORIGIN;
 }
+
+export function desktopNotice(input = {}) {
+  return {
+    title: String(input.title || "pi-box").slice(0, 120),
+    body: String(input.body || "").slice(0, 240),
+  };
+}

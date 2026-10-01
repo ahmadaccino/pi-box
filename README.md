@@ -46,7 +46,7 @@ Real browser sessions (Playwright locally, Cloudflare Browser Rendering in the c
 
 ## Talk to your boxes
 
-Web UI: left roster of chats, machines pane in the aside, thread on the right. Clerk if `CLERK_SECRET_KEY` is set; local mock skips auth. Mesh placement is documented in [docs/mesh.md](docs/mesh.md).
+Web UI: left roster of chats, machines pane in the aside, thread on the right. The composer takes paste, drag-drop, and a file picker. The transcript renders markdown, tables, math, and inline cards (approval, ready-to-send, question, file). Clerk if `CLERK_SECRET_KEY` is set; local mock skips auth. Mesh placement is documented in [docs/mesh.md](docs/mesh.md). Attachments, cards, search, and notifications: [docs/transcript.md](docs/transcript.md).
 
 While a turn is running the composer stays enabled. A new message is delivered with Pi `steer` (the button reads Steer) instead of starting another turn. Stop calls Pi `abort` on that session.
 
@@ -137,6 +137,8 @@ Keep these Worker secrets (do not commit values):
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `CLOUDFLARE_API_TOKEN` (passed into the container as `BROWSER_CDP_TOKEN`)
+- `BRAVE_API_KEY`, `TAVILY_API_KEY`, or `EXA_API_KEY` (optional web search; a vault token works too)
+- `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (optional Web Push)
 
 The routines skill calls back from the container to `/api/routines`. That call carries `PI_BOX_INTERNAL_TOKEN`, a per-box HMAC minted by the Worker. Set `INTERNAL_API_SECRET` only if you want a dedicated key; otherwise the Worker derives it from `VAULT_ENCRYPTION_KEY`, then `PI_BOX_PASSWORD`, then `CLERK_SECRET_KEY`. Do not set `GATEWAY_TOKEN` to unblock routines. A password cookie or Clerk session is accepted without that header, so the web UI keeps working if `GATEWAY_TOKEN` is set later. `GATEWAY_TOKEN` is still the OAuth state fallback when `GOOGLE_CLIENT_SECRET` is unset.
 
@@ -150,10 +152,14 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 npx wrangler secret put CLOUDFLARE_API_TOKEN
 # optional: npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
 # optional: npx wrangler secret put CLERK_SECRET_KEY
+# optional search: npx wrangler secret put BRAVE_API_KEY
+# optional push: npx wrangler secret put VAPID_PUBLIC_KEY
+# optional push: npx wrangler secret put VAPID_PRIVATE_KEY
+# optional push: npx wrangler secret put VAPID_SUBJECT
 npx wrangler deploy
 ```
 
-`npx wrangler deploy` **rebuilds the container image**. After sidecar/Dockerfile/plugin changes do **not** use `--containers-rollout=none` (Worker-only). Routines scheduling, webhooks, and the `/routines` page ship in the Worker. The routines skill, the localhost tool proxy, and the recurring-task system note ship in the container image, so a routines deploy needs the image rebuild. Set `PI_BOX_PUBLIC_URL` to the Worker origin so the cloud computer can call Mesh. `CLOUDFLARE_API_TOKEN` is never committed. Optional: `CLOUDFLARE_ACCOUNT_ID` (defaults to the pi-box account used in docs).
+`npx wrangler deploy` **rebuilds the container image**. After sidecar/Dockerfile/plugin changes do **not** use `--containers-rollout=none` (Worker-only). Routines scheduling, webhooks, and the `/routines` page ship in the Worker. The routines skill, the localhost tool proxy, and the recurring-task system note ship in the container image, so a routines deploy needs the image rebuild. Attachments, `web_search` / `web_fetch`, question cards, and artifact downloads also live in the sidecar, so this slice needs the same image rebuild. Set `PI_BOX_PUBLIC_URL` to the Worker origin so the cloud computer can call Mesh. `CLOUDFLARE_API_TOKEN` is never committed. Optional: `CLOUDFLARE_ACCOUNT_ID` (Browser Rendering search fallback; defaults to the pi-box account used in docs).
 
 ## License
 

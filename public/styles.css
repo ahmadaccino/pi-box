@@ -188,6 +188,28 @@ header {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.msg.assistant .bubble { white-space: normal; }
+.msg.assistant .bubble p { margin: 0 0 8px; }
+.msg.assistant .bubble p:last-child { margin-bottom: 0; }
+.msg.assistant .bubble h1,
+.msg.assistant .bubble h2,
+.msg.assistant .bubble h3 { font-size: 16px; margin: 0 0 8px; }
+.msg.assistant .bubble pre {
+  overflow: auto;
+  background: #12100c;
+  padding: 10px;
+  border: 1px solid var(--line);
+}
+.msg.assistant .bubble code { font-family: var(--mono); font-size: 13px; }
+.msg.assistant .bubble table { border-collapse: collapse; width: 100%; margin: 0 0 8px; }
+.msg.assistant .bubble th,
+.msg.assistant .bubble td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
+.msg.assistant .bubble a { color: var(--amber); }
+.hl-kw { color: var(--amber); }
+.hl-str { color: var(--ok); }
+.hl-num { color: #d6c08a; }
+.hl-com { color: #6e685c; }
+.math { font-family: var(--mono); }
 .msg.user .bubble { background: #241f18; }
 .who {
   font-family: var(--mono);
@@ -223,13 +245,28 @@ header {
 .tool.open pre { display: block; }
 
 #composer {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   padding: 12px 14px 16px;
   border-top: 1px solid var(--line);
   background: #14120e;
 }
+#composer.drag { outline: 1px dashed var(--amber); outline-offset: -6px; }
+.composer-row { display: flex; gap: 8px; align-items: flex-end; }
+.composer-row #input { flex: 1; }
+.pending-files { display: flex; gap: 6px; flex-wrap: wrap; }
+.pending-files:empty { display: none; }
+.file-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  border: 1px solid var(--line);
+  padding: 2px 6px;
+  color: var(--mute);
+}
+.artifact img { max-width: 100%; height: auto; display: block; margin: 0 0 8px; }
+.user-files { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.user-files img { max-width: 160px; max-height: 120px; display: block; }
 #stop {
   background: transparent;
   color: var(--bad);
@@ -262,6 +299,16 @@ header {
   color: var(--mute);
 }
 .card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.card-actions button.on { outline: 1px solid var(--amber); }
+.card input[type="text"] {
+  width: 100%;
+  margin: 8px 0;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  font: inherit;
+}
 .card-actions button { min-height: 36px; }
 textarea {
   resize: none;

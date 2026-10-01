@@ -21,6 +21,23 @@ import { MeshStore, type MeshRecords } from "./mesh-state.ts";
 import { sanitizeSession } from "./password.ts";
 import type { Job } from "./place.ts";
 import { getSnapshotBlob, putSnapshotBlob, snapshotKey } from "./snapshot-r2.ts";
+import {
+  attachmentMeta,
+  bindAttachments,
+  bytesToBase64,
+  parseChatBody,
+  uploadObjectKey,
+  uploadsFromSnapshot,
+} from "../container/chat-body.mjs";
+import {
+  listSubscriptions,
+  noticesFromSseBlock,
+  removeSubscription,
+  upsertSubscription,
+  type PushNote,
+  type PushSubscriptionRecord,
+} from "./push.ts";
+import { sendWebPush } from "./web-push.ts";
 
 export type MeshEnv = {
   MESH: DurableObjectNamespace;
@@ -32,7 +49,13 @@ export type MeshEnv = {
   OPENAI_API_KEY?: string;
   XAI_API_KEY?: string;
   GATEWAY_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
 };
+
+type PushSubscriptionList = PushSubscriptionRecord[];
 
 type Pending = {
   writer: WritableStreamDefaultWriter<Uint8Array>;
@@ -53,6 +76,15 @@ export class Mesh extends DurableObject<MeshEnv> {
     const path = url.pathname.replace(/\/+$/, "") || "/";
     if (isRoutinesApiPath(path)) {
       return this.handleRoutines(request);
+    }
+    if (path === "/api/push/vapid" && request.method === "GET") {
+      return json({
+        publicKey: this.env.VAPID_PUBLIC_KEY || "",
+        configured: Boolean(this.env.VAPID_PUBLIC_KEY && this.env.VAPID_PRIVATE_KEY),
+      });
+    }
+    if (path === "/api/push/subscriptions" && (request.method === "POST" || request.method === "DELETE")) {
+      return this.handlePushSubscription(request);
     }
     if (path === "/api/chat" && request.method === "POST") {
       return this.handleChat(request);
@@ -82,10 +114,12 @@ export class Mesh extends DurableObject<MeshEnv> {
           return this.writePending(jobId, event, data);
         },
         onDeviceAck: async (jobId, deviceId) => {
-          finishRoutineRun(this.routineBook, store, jobId, {
+          const notice = finishRoutineRun(this.routineBook, store, jobId, {
             status: "succeeded",
             now: Date.now(),
           });
+          if (notice) this.noteRoutine(notice);
+          else this.noteTurn(request.headers.get("x-pi-box-mesh") || "default");
           await this.writePending(jobId, "status", { state: "pi", runtime: deviceId });
           await this.writePending(jobId, "done", { mock: false, runtime: deviceId });
           await this.closePending(jobId);
@@ -193,10 +227,12 @@ export class Mesh extends DurableObject<MeshEnv> {
     if (parsed.type === "ack" && parsed.jobId) {
       await this.withStore((store) => {
         store.ack({ jobId: parsed.jobId as string, deviceId, now: Date.now() });
-        finishRoutineRun(this.routineBook, store, parsed.jobId as string, {
+        const notice = finishRoutineRun(this.routineBook, store, parsed.jobId as string, {
           status: "succeeded",
           now: Date.now(),
         });
+        if (notice) this.noteRoutine(notice);
+        else this.noteTurn(this.routineBook.settings.meshId || "default");
       });
       await this.writePending(parsed.jobId, "status", { state: "pi", runtime: deviceId });
       await this.writePending(parsed.jobId, "done", { mock: false, runtime: deviceId });
@@ -250,28 +286,57 @@ export class Mesh extends DurableObject<MeshEnv> {
 
   private async handleChat(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const raw = await request.text();
-    let body: { message?: string; session?: string; require?: string[] } = {};
-    try {
-      body = JSON.parse(raw || "{}") as typeof body;
-    } catch {
-      return json({ error: "invalid json" }, { status: 400 });
-    }
-    const sessionId = sanitizeSession(
-      url.searchParams.get("session") ||
-        request.headers.get("x-pi-box-session") ||
-        body.session,
-    );
+    const buf = new Uint8Array(await request.arrayBuffer());
     const meshId = request.headers.get("x-pi-box-mesh") || "default";
+    const sessionHint = sanitizeSession(
+      url.searchParams.get("session") || request.headers.get("x-pi-box-session"),
+    );
+    const parsed = parseChatBody(buf, request.headers.get("content-type") || "", {
+      sessionId: sessionHint,
+    });
+    if (!parsed.ok) {
+      return json({ error: parsed.error || "invalid body" }, { status: parsed.status || 400 });
+    }
+    const sessionId = sanitizeSession(sessionHint || parsed.session);
+    const attachments = bindAttachments(parsed.attachments, sessionId);
+    for (const file of attachments) {
+      file.r2Key = uploadObjectKey(meshId, file.id);
+      if (!this.env.STATE || !file.bytes) continue;
+      try {
+        const raw = file.bytes;
+        const body = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+        await this.env.STATE.put(file.r2Key, body);
+      } catch {
+        file.r2Key = "";
+      }
+    }
+    const forwardBody = JSON.stringify({
+      message: parsed.message,
+      session: sessionId,
+      require: parsed.require,
+      attachments: attachments.map((file) => ({
+        id: file.id,
+        name: file.name,
+        mime: file.mime,
+        rel: file.rel,
+        r2Key: file.r2Key,
+        data: file.bytes ? bytesToBase64(file.bytes) : "",
+      })),
+    });
     const planned = await this.withStore((store) => {
       this.routineBook.rememberSession(sessionId);
+      this.routineBook.settings.meshId = meshId;
       return planChatTurn(store, {
         sessionId,
-        message: body.message,
-        require: body.require,
+        message: parsed.message,
+        require: parsed.require,
         now: Date.now(),
         browser: Boolean(this.env.BROWSER),
-        payload: { message: body.message, raw, sessionId },
+        payload: {
+          message: parsed.message,
+          sessionId,
+          attachments: attachmentMeta(attachments),
+        },
       });
     });
     const { job, decision } = planned;
@@ -290,12 +355,14 @@ export class Mesh extends DurableObject<MeshEnv> {
       }
       const container = getContainer(this.env.PI_BOX, meshId);
       const headers = new Headers(request.headers);
+      headers.set("content-type", "application/json");
+      headers.delete("content-length");
       headers.set("x-pi-box-mesh", meshId);
       headers.set("x-pi-box-origin", new URL(request.url).origin);
       const forwarded = new Request(request.url, {
         method: "POST",
         headers,
-        body: raw,
+        body: forwardBody,
       });
       const res = await container.fetch(forwarded);
       return this.tapCloud(res, job.id, meshId, sessionId);
@@ -375,12 +442,18 @@ export class Mesh extends DurableObject<MeshEnv> {
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let sseTail = "";
     void (async () => {
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           await writer.write(value);
+          sseTail += decoder.decode(value, { stream: true });
+          const parts = sseTail.split("\n\n");
+          sseTail = parts.pop() || "";
+          for (const part of parts) this.noteSse(meshId, part);
         }
         await this.withStore((store) =>
           store.ack({ jobId, deviceId: "cloud", now: Date.now() }),
@@ -422,14 +495,19 @@ export class Mesh extends DurableObject<MeshEnv> {
   }
 
   private sendJob(deviceId: string, job: Job, meshId = "default") {
+    void this.deliverJob(deviceId, job, meshId);
+  }
+
+  private async deliverJob(deviceId: string, job: Job, meshId = "default") {
     const sockets = this.ctx.getWebSockets(deviceId);
+    const payload = await this.hydrateAttachments(job.payload);
     const wire = {
       type: "job",
       job: {
         id: job.id,
         sessionId: job.sessionId,
         require: job.require,
-        payload: job.payload,
+        payload,
         snapshotKey: snapshotKey(meshId, job.sessionId),
         env: {
           OPENROUTER_API_KEY: this.env.OPENROUTER_API_KEY || "",
@@ -471,6 +549,7 @@ export class Mesh extends DurableObject<MeshEnv> {
           body: result.body,
         }),
       );
+      if (res.ok) await this.restoreUploads(meshId, result.body);
       return { ok: res.ok };
     } catch {
       return { ok: false };
@@ -594,11 +673,12 @@ export class Mesh extends DurableObject<MeshEnv> {
     if (decision.wait || decision.fail || !decision.deviceId) {
       await this.withStore((store) => {
         store.fail(claimed.jobId);
-        finishRoutineRun(this.routineBook, store, claimed.jobId, {
+        const notice = finishRoutineRun(this.routineBook, store, claimed.jobId, {
           status: decision.wait ? "waiting" : "failed",
           error: decision.wait ? "waiting for a matching machine" : "no_capacity",
           now: Date.now(),
         });
+        this.noteRoutine(notice);
       });
       return;
     }
@@ -610,11 +690,12 @@ export class Mesh extends DurableObject<MeshEnv> {
     if (!restored.ok) {
       await this.withStore((store) => {
         store.fail(claimed.jobId, "cloud");
-        finishRoutineRun(this.routineBook, store, claimed.jobId, {
+        const notice = finishRoutineRun(this.routineBook, store, claimed.jobId, {
           status: "failed",
           error: "snapshot restore failed",
           now: Date.now(),
         });
+        this.noteRoutine(notice);
       });
       return;
     }
@@ -642,22 +723,24 @@ export class Mesh extends DurableObject<MeshEnv> {
       await this.withStore((store) => {
         if (failed) store.fail(claimed.jobId, "cloud");
         else store.ack({ jobId: claimed.jobId, deviceId: "cloud", now: Date.now() });
-        finishRoutineRun(this.routineBook, store, claimed.jobId, {
+        const notice = finishRoutineRun(this.routineBook, store, claimed.jobId, {
           status: failed ? "failed" : "succeeded",
           result: assistant,
           error: failed ? "run failed" : "",
           now: Date.now(),
         });
+        this.noteRoutine(notice);
       });
       if (!failed) await this.captureFromCloud(meshId, claimed.sessionId);
     } catch (err) {
       await this.withStore((store) => {
         store.fail(claimed.jobId, "cloud");
-        finishRoutineRun(this.routineBook, store, claimed.jobId, {
+        const notice = finishRoutineRun(this.routineBook, store, claimed.jobId, {
           status: "failed",
           error: err instanceof Error ? err.message : "cloud run failed",
           now: Date.now(),
         });
+        this.noteRoutine(notice);
       });
     }
   }
@@ -665,6 +748,122 @@ export class Mesh extends DurableObject<MeshEnv> {
   private storageSql(): RoutineSql | null {
     const storage = this.ctx.storage as { sql?: RoutineSql };
     return storage.sql || null;
+  }
+
+  private noteSse(meshId: string, block: string) {
+    for (const note of noticesFromSseBlock(block)) {
+      this.defer(this.pushNote(meshId, note));
+    }
+  }
+
+  private noteTurn(meshId: string) {
+    this.defer(
+      this.pushNote(meshId, { title: "pi-box", body: "Turn finished", tag: "turn-done" }),
+    );
+  }
+
+  private noteRoutine(notice: { status?: string; name?: string; text?: string; runId?: string } | null) {
+    if (!notice || notice.status === "waiting") return;
+    const meshId = this.routineBook.settings.meshId || "default";
+    this.defer(
+      this.pushNote(meshId, {
+        title: notice.status === "failed" ? "Routine failed" : "Routine finished",
+        body: String(notice.text || notice.name || "A routine run finished").slice(0, 180),
+        tag: `routine-${notice.runId || "run"}`,
+      }),
+    );
+  }
+
+  private async pushNote(meshId: string, note: PushNote) {
+    const subs = listSubscriptions(
+      (await this.ctx.storage.get<PushSubscriptionList>("push-subs")) || [],
+      meshId,
+    );
+    if (!subs.length) return;
+    await sendWebPush(this.env, subs, note);
+  }
+
+  private async handlePushSubscription(request: Request): Promise<Response> {
+    const meshId = request.headers.get("x-pi-box-mesh") || "default";
+    if (request.method === "DELETE") {
+      let body: { endpoint?: string } = {};
+      try {
+        body = (await request.json()) as { endpoint?: string };
+      } catch {
+        return json({ error: "invalid json" }, { status: 400 });
+      }
+      const current = (await this.ctx.storage.get<PushSubscriptionList>("push-subs")) || [];
+      await this.ctx.storage.put("push-subs", removeSubscription(current, String(body.endpoint || "")));
+      return json({ ok: true });
+    }
+    let body: {
+      endpoint?: string;
+      keys?: { p256dh?: string; auth?: string };
+      expirationTime?: number | null;
+    } = {};
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return json({ error: "invalid json" }, { status: 400 });
+    }
+    const current = (await this.ctx.storage.get<PushSubscriptionList>("push-subs")) || [];
+    const saved = upsertSubscription(current, { ...body, meshId }, Date.now());
+    if (!saved.ok) return json({ error: saved.error }, { status: 400 });
+    await this.ctx.storage.put("push-subs", saved.list);
+    return json({ ok: true, count: saved.list.length });
+  }
+
+  private async hydrateAttachments(payload: unknown) {
+    const source = payload && typeof payload === "object" ? { ...(payload as Record<string, unknown>) } : {};
+    const list = Array.isArray(source.attachments) ? source.attachments : [];
+    if (!list.length || !this.env.STATE) return source;
+    const attachments = [];
+    for (const item of list) {
+      const row = item && typeof item === "object" ? { ...(item as Record<string, unknown>) } : {};
+      const key = String(row.r2Key || "");
+      if (!key || row.data) {
+        attachments.push(row);
+        continue;
+      }
+      try {
+        const obj = await this.env.STATE.get(key);
+        if (obj) row.data = bytesToBase64(new Uint8Array(await obj.arrayBuffer()));
+      } catch {
+        /* the turn still runs; the note says the file was not copied */
+      }
+      attachments.push(row);
+    }
+    return { ...source, attachments };
+  }
+
+  private async restoreUploads(meshId: string, snapshotBody: ArrayBuffer) {
+    if (!this.env.STATE) return;
+    const files = uploadsFromSnapshot(new TextDecoder().decode(snapshotBody));
+    const container = getContainer(this.env.PI_BOX, meshId);
+    for (const file of files) {
+      const rel = String(file?.rel || "");
+      const r2Key = String(file?.r2Key || "");
+      if (!rel || !r2Key) continue;
+      try {
+        const obj = await this.env.STATE.get(r2Key);
+        if (!obj) continue;
+        const headers: Record<string, string> = {
+          "content-type": String(file.mime || "application/octet-stream"),
+          "x-pi-box-rel": rel,
+          "x-pi-box-name": String(file.name || ""),
+        };
+        if (this.env.GATEWAY_TOKEN) headers["x-pi-box-internal"] = this.env.GATEWAY_TOKEN;
+        await container.fetch(
+          new Request("http://sidecar/internal/uploads", {
+            method: "PUT",
+            headers,
+            body: await obj.arrayBuffer(),
+          }),
+        );
+      } catch {
+        /* a missing upload does not block the turn */
+      }
+    }
   }
 
   private loadRoutineBook() {

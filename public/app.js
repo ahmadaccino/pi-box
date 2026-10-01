@@ -1,4 +1,6 @@
 import { composerAction, composerView } from "./turn-control.js";
+import { mountMath, renderMarkdown } from "./markdown.js";
+import { backgroundNotice, urlBase64ToUint8Array } from "./notify.js";
 
 const gate = document.getElementById("gate");
 const app = document.getElementById("app");
@@ -7,6 +9,9 @@ const skillList = document.getElementById("skill-list");
 const log = document.getElementById("log");
 const form = document.getElementById("composer");
 const input = document.getElementById("input");
+const fileInput = document.getElementById("file");
+const attachBtn = document.getElementById("attach");
+const pendingFiles = document.getElementById("pending-files");
 const send = document.getElementById("send");
 const stop = document.getElementById("stop");
 const statusEl = document.getElementById("status");
@@ -29,6 +34,9 @@ let chatSession = localStorage.getItem("pi-box-chat") || crypto.randomUUID();
 let computerSessionId = null;
 let computerTimer = null;
 let turnLive = false;
+let pushReady = false;
+let pushPublicKey = "";
+const pending = [];
 
 localStorage.setItem("pi-box-chat", chatSession);
 
@@ -274,10 +282,13 @@ function selectBox(id) {
   input.focus();
 }
 
-function addUser(text) {
+function addUser(text, files) {
   const wrap = el("article", "msg user");
   wrap.append(el("div", "who", "you"));
-  wrap.append(el("div", "bubble", text));
+  const bubble = el("div", "bubble", text);
+  const extra = userAttachments(files);
+  if (extra) bubble.append(extra);
+  wrap.append(bubble);
   log.append(wrap);
   log.scrollTop = log.scrollHeight;
 }
@@ -292,8 +303,11 @@ function addAssistant() {
   return {
     wrap,
     bubble,
+    raw: "",
     append(delta) {
-      bubble.textContent += delta;
+      this.raw += delta;
+      bubble.innerHTML = renderMarkdown(this.raw);
+      mountMath(bubble, window.katex);
       log.scrollTop = log.scrollHeight;
     },
     tool(ev) {
@@ -329,8 +343,20 @@ function addAssistant() {
       log.scrollTop = log.scrollHeight;
     },
     card(payload) {
-      wrap.insertBefore(draftCard(payload), bubble);
+      const kind = payload.kind || payload.type;
+      const node =
+        kind === "approval"
+          ? approvalCard(payload)
+          : kind === "question"
+            ? questionCard(payload)
+            : kind === "artifact"
+              ? artifactCard(payload)
+              : draftCard(payload);
+      wrap.insertBefore(node, bubble);
       log.scrollTop = log.scrollHeight;
+      if (kind === "approval") ping("approval", "Approval needed", payload.summary || "Waiting for you", payload.id);
+      else if (kind === "draft") ping("draft", "Ready to send", payload.subject || payload.title || "A draft is waiting", payload.id);
+      else if (kind === "question") ping("question", "Question", payload.prompt || "A question is waiting", payload.id);
     },
   };
 }
@@ -412,23 +438,230 @@ function draftCard(payload) {
   return card;
 }
 
-async function chat(message) {
+function questionCard(payload) {
+  const card = cardShell(payload.title || "Question");
+  card.classList.add("question");
+  card.append(el("p", "card-summary", payload.prompt || ""));
+  const selected = new Set();
+  const row = el("div", "card-actions");
+  const options = Array.isArray(payload.options) ? payload.options : [];
+  const custom = document.createElement("input");
+  custom.type = "text";
+  custom.placeholder = "Your answer";
+  custom.hidden = payload.allowCustom === false;
+  for (const option of options) {
+    const btn = el("button", "ghost", option);
+    btn.type = "button";
+    btn.addEventListener("click", () => {
+      if (payload.multiple) {
+        if (selected.has(option)) selected.delete(option);
+        else selected.add(option);
+        btn.classList.toggle("on", selected.has(option));
+      } else {
+        selected.clear();
+        selected.add(option);
+        for (const child of row.querySelectorAll("button")) child.classList.remove("on");
+        btn.classList.add("on");
+      }
+    });
+    row.append(btn);
+  }
+  const submit = el("button", "", "Answer");
+  submit.type = "button";
+  submit.addEventListener("click", async () => {
+    submit.disabled = true;
+    const body = { options: [...selected], custom: payload.allowCustom === false ? "" : custom.value };
+    try {
+      const res = await fetch(`/api/cards/${encodeURIComponent(payload.id)}/answer`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(await authHeader()) },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        submit.disabled = false;
+        card.append(el("p", "card-result", data.error || "Could not send that answer"));
+        return;
+      }
+      card.append(el("p", "card-result", data.reply || "Sent"));
+      addUser(data.reply || "");
+    } catch (err) {
+      submit.disabled = false;
+      card.append(el("p", "card-result", String(err)));
+    }
+  });
+  card.append(row);
+  if (!custom.hidden) card.append(custom);
+  card.append(submit);
+  return card;
+}
+
+function artifactCard(payload) {
+  const card = cardShell(payload.title || (payload.image ? "Image" : "File"));
+  card.classList.add("artifact");
+    if (payload.image) {
+    const img = document.createElement("img");
+    img.alt = payload.name || "image";
+    if (payload.src) img.src = payload.src;
+    else if (payload.url) {
+      void (async () => {
+        const res = await fetch(payload.url, { headers: await authHeader() });
+        if (!res.ok) return;
+        img.src = URL.createObjectURL(await res.blob());
+      })();
+    }
+    card.append(img);
+  }
+  card.append(el("p", "card-line", payload.name || payload.path || "file"));
+  const link = el("button", "ghost", "Download");
+  link.type = "button";
+  link.addEventListener("click", () => downloadFile(payload));
+  card.append(link);
+  return card;
+}
+
+async function downloadFile(payload) {
+  const res = await fetch(payload.url, { headers: await authHeader() });
+  if (!res.ok) return;
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = payload.name || "download";
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
+}
+
+function fileToAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const data = result.includes(",") ? result.split(",").pop() : result;
+      resolve({ name: file.name || "pasted", type: file.type || "application/octet-stream", data });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderPending() {
+  if (!pendingFiles) return;
+  pendingFiles.innerHTML = "";
+  for (const file of pending) {
+    const chip = el("span", "file-chip", file.name || "file");
+    pendingFiles.append(chip);
+  }
+}
+
+function addPending(files) {
+  for (const file of files) {
+    if (!file) continue;
+    if (!file.name) {
+      const ext = (file.type || "application/octet-stream").split("/")[1] || "bin";
+      pending.push(new File([file], `pasted.${ext}`, { type: file.type }));
+    } else pending.push(file);
+  }
+  renderPending();
+}
+
+function ping(kind, title, body, tag) {
+  const notice = backgroundNotice({
+    hidden: document.hidden,
+    unfocused: typeof document.hasFocus === "function" ? !document.hasFocus() : false,
+    kind,
+    title,
+    body,
+    tag: tag ? `${kind}-${tag}` : kind,
+  });
+  if (!notice) return;
+  if (window.piBoxDesktop?.notify) {
+    window.piBoxDesktop.notify(notice);
+    return;
+  }
+  if (pushReady) return;
+  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    new Notification(notice.title, { body: notice.body, tag: notice.tag });
+  }
+}
+
+async function ensureNotifyPermission() {
+  if (typeof Notification === "undefined") return;
+  if (Notification.permission === "default") {
+    try {
+      await Notification.requestPermission();
+    } catch {
+      /* the browser may ignore a permission prompt */
+    }
+  }
+}
+
+async function enablePush(publicKey) {
+  if (!publicKey || window.piBoxDesktop || !("serviceWorker" in navigator) || !("PushManager" in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+    const res = await fetch("/api/push/subscriptions", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(await authHeader()) },
+      body: JSON.stringify(sub.toJSON()),
+    });
+    pushReady = res.ok;
+  } catch {
+    pushReady = false;
+  }
+}
+
+function userAttachments(files) {
+  if (!files?.length) return null;
+  const row = el("div", "user-files");
+  for (const file of files) {
+    if (file.type && file.type.startsWith("image/")) {
+      const img = document.createElement("img");
+      img.alt = file.name || "image";
+      img.src = URL.createObjectURL(file);
+      row.append(img);
+    } else {
+      row.append(el("span", "file-chip", file.name || "file"));
+    }
+  }
+  return row;
+}
+
+async function chat(message, files = []) {
   if (!current) return;
-  addUser(message);
+  addUser(message, files);
   const asst = addAssistant();
   turnLive = true;
   applyComposer();
   setStatus("running", "live");
   try {
     const headers = {
-      "content-type": "application/json",
       "x-pi-box-session": chatSession,
       ...(await authHeader()),
     };
+    let body;
+    if (files.length) {
+      body = new FormData();
+      body.set("message", message);
+      body.set("session", chatSession);
+      for (const file of files) body.append("file", file, file.name);
+    } else {
+      headers["content-type"] = "application/json";
+      body = JSON.stringify({ message, session: chatSession, boxId: current.id });
+    }
     const res = await fetch(`/api/chat?session=${encodeURIComponent(chatSession)}`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ message, session: chatSession, boxId: current.id }),
+      body,
     });
     if (!res.ok || !res.body) {
       asst.append(`error ${res.status}`);
@@ -462,7 +695,6 @@ async function chat(message) {
         }
         if (event === "text" && payload.delta) asst.append(payload.delta);
         else if (event === "tool") asst.tool(payload);
-        else if (event === "approval") asst.approval(payload);
         else if (event === "card") asst.card(payload);
         else if (event === "status" && payload.state === "mock") setStatus("mock", "live");
         else if (event === "status" && payload.state === "waiting") {
@@ -474,8 +706,9 @@ async function chat(message) {
         } else if (event === "error") {
           asst.append("\n" + (payload.message || "error"));
           setStatus("error", "err");
-        } else if (event === "done") {
-          setStatus(payload.waiting ? "waiting" : payload.mock ? "mock" : "idle");
+        }         else if (event === "done") {
+          setStatus(payload.waiting ? "waiting" : payload.error ? "error" : payload.mock ? "mock" : "idle");
+          if (!payload.waiting && !payload.error) ping("done", "pi-box", payload.mock ? "Mock turn finished" : "Turn finished", "turn");
         }
       }
     }
@@ -490,9 +723,11 @@ async function chat(message) {
   }
 }
 
-async function steerTurn(message) {
-  addUser(message);
+async function steerTurn(message, files = []) {
+  addUser(message, files);
   try {
+    const attachments = [];
+    for (const file of files) attachments.push(await fileToAttachment(file));
     const res = await fetch(`/api/sessions/${encodeURIComponent(chatSession)}/steer`, {
       method: "POST",
       headers: {
@@ -500,7 +735,7 @@ async function steerTurn(message) {
         "x-pi-box-session": chatSession,
         ...(await authHeader()),
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, attachments }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -528,12 +763,50 @@ async function stopTurn() {
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  const action = composerAction(turnLive, input.value);
+  const files = pending.splice(0, pending.length);
+  renderPending();
+  const action = composerAction(turnLive, input.value, { attachments: files.length });
   if (action.type === "ignore") return;
   input.value = "";
-  if (action.type === "steer") steerTurn(action.message);
-  else chat(action.message);
+  void ensureNotifyPermission();
+  if (action.type === "steer") steerTurn(action.message, files);
+  else chat(action.message, files);
 });
+if (attachBtn && fileInput) {
+  attachBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    addPending(fileInput.files || []);
+    fileInput.value = "";
+  });
+}
+if (input) {
+  input.addEventListener("paste", (e) => {
+    const files = [];
+    for (const item of e.clipboardData?.items || []) {
+      if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (!files.length) return;
+    e.preventDefault();
+    addPending(files);
+  });
+}
+if (form) {
+  form.addEventListener("dragover", (e) => {
+    if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+    e.preventDefault();
+    form.classList.add("drag");
+  });
+  form.addEventListener("dragleave", () => form.classList.remove("drag"));
+  form.addEventListener("drop", (e) => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    form.classList.remove("drag");
+    addPending(e.dataTransfer.files);
+  });
+}
 if (stop) stop.addEventListener("click", () => stopTurn());
 applyComposer();
 input.addEventListener("keydown", (e) => {
@@ -544,6 +817,7 @@ input.addEventListener("keydown", (e) => {
 });
 
 async function loadBoxes() {
+  if (pushPublicKey) void enablePush(pushPublicKey);
   const res = await fetch("/api/boxes", { headers: await authHeader() });
   if (!res.ok) throw new Error("boxes " + res.status);
   const data = await res.json();
@@ -601,6 +875,7 @@ if (pwform) {
 
 async function boot() {
   const cfg = await fetch("/api/config").then((r) => r.json()).catch(() => ({}));
+  pushPublicKey = cfg.pushPublicKey || "";
   if (cfg.passwordRequired && pwform) {
     showGate();
     document.getElementById("gate-copy").textContent = "Password to open this box.";
@@ -671,8 +946,12 @@ async function pollRoutineFeed() {
       rememberRoutine(notice.id);
       const wrap = el("article", "msg assistant");
       wrap.append(el("div", "who", "routine"));
-      wrap.append(el("div", "bubble", notice.text || ""));
+      const bubble = el("div", "bubble");
+      bubble.innerHTML = renderMarkdown(notice.text || "");
+      wrap.append(bubble);
       log.append(wrap);
+      const failed = notice.status === "failed";
+      ping("routine", failed ? "Routine failed" : "Routine finished", notice.text || notice.name || "", notice.id);
     }
     if (fresh.length) log.scrollTop = log.scrollHeight;
   } catch {

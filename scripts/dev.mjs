@@ -30,6 +30,8 @@ import {
   finishRoutineRun,
   handleRoutinesRequest,
 } from "../src/routines.ts";
+import { attachmentMeta, parseChatBody } from "../container/chat-body.mjs";
+import { listSubscriptions, removeSubscription, upsertSubscription } from "../src/push.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicDir = path.join(root, "public");
@@ -50,6 +52,7 @@ const mesh = new MeshStore();
 const routines = new RoutineBook();
 const snapshots = new Map();
 const pending = new Map();
+let pushSubs = [];
 const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -274,28 +277,63 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname === "/api/chat" && req.method === "POST") {
+  if (url.pathname === "/api/push/vapid" && req.method === "GET") {
+    sendJson(res, 200, {
+      publicKey: process.env.VAPID_PUBLIC_KEY || "",
+      configured: Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY),
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/push/subscriptions" && (req.method === "POST" || req.method === "DELETE")) {
     const chunks = [];
     for await (const c of req) chunks.push(c);
-    const raw = Buffer.concat(chunks).toString("utf8") || "{}";
     let body = {};
     try {
-      body = JSON.parse(raw);
+      body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
     } catch {
       sendJson(res, 400, { error: "invalid json" });
       return;
     }
+    if (req.method === "DELETE") {
+      pushSubs = removeSubscription(pushSubs, body.endpoint || "");
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    const saved = upsertSubscription(pushSubs, { ...body, meshId: "default" });
+    if (!saved.ok) {
+      sendJson(res, 400, { error: saved.error });
+      return;
+    }
+    pushSubs = saved.list;
+    sendJson(res, 200, { ok: true, count: listSubscriptions(pushSubs, "default").length });
+    return;
+  }
+
+  if (url.pathname === "/api/chat" && req.method === "POST") {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const rawBuf = Buffer.concat(chunks);
+    const parsed = parseChatBody(rawBuf, req.headers["content-type"] || "");
+    if (!parsed.ok) {
+      sendJson(res, parsed.status || 400, { error: parsed.error || "invalid body" });
+      return;
+    }
     const sessionId = sanitizeSession(
-      url.searchParams.get("session") || req.headers["x-pi-box-session"] || body.session,
+      url.searchParams.get("session") || req.headers["x-pi-box-session"] || parsed.session,
     );
     routines.rememberSession(sessionId);
     mesh.sweep(Date.now());
     const planned = planChatTurn(mesh, {
       sessionId,
-      message: body.message,
-      require: body.require,
+      message: parsed.message,
+      require: parsed.require,
       now: Date.now(),
-      payload: { message: body.message, raw, sessionId },
+      payload: {
+        message: parsed.message,
+        sessionId,
+        attachments: attachmentMeta(parsed.attachments),
+      },
     });
     const { job, decision } = planned;
     if (decision.wait) {
@@ -331,8 +369,8 @@ const server = http.createServer(async (req, res) => {
       const target = `http://127.0.0.1:${AGENT_PORT}${url.pathname}${url.search}`;
       const headers = new Headers(req.headers);
       headers.delete("host");
-      headers.set("content-type", "application/json");
-      const upstream = await fetch(target, { method: "POST", headers, body: raw });
+      if (!headers.get("content-type")) headers.set("content-type", "application/json");
+      const upstream = await fetch(target, { method: "POST", headers, body: rawBuf });
       res.writeHead(upstream.status, {
         ...Object.fromEntries(upstream.headers),
         "x-pi-box-runtime": "cloud",

@@ -51,6 +51,8 @@ export function isMeshChatPath(pathname: string): boolean {
     pathname === "/api/chat" ||
     pathname === "/api/boxes" ||
     pathname === "/api/skills" ||
+    pathname === "/api/push/vapid" ||
+    pathname === "/api/push/subscriptions" ||
     /^\/api\/sessions\/[^/]+\/snapshot$/.test(pathname)
   );
 }
