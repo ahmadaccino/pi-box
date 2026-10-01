@@ -37,6 +37,8 @@ const secrets = {
   CLERK_SECRET_KEY: "clerk-secret-d4f1",
   PI_BOX_PASSWORD: "password-secret-d4f1",
   PI_BOX_DEVICE_SECRET: "device-secret-d4f1",
+  PI_BOX_INTERNAL_TOKEN: "internal-token-d4f1",
+  INTERNAL_API_SECRET: "internal-secret-d4f1",
 };
 
 try {

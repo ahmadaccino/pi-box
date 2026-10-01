@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createAgentRuntime } from "./agent.mjs";
-import { startDeviceRoutinesProxy } from "./routines-proxy.mjs";
+import { sealInternalTokenFromEnv, startDeviceRoutinesProxy } from "./routines-proxy.mjs";
 import {
   ackJob,
   connectJobs,
@@ -166,6 +166,7 @@ export async function handleDeviceJob(job, ctx) {
     process.env[k] = String(v);
   }
   sealVaultKeyFromEnv();
+  sealInternalTokenFromEnv();
   process.env.PI_CODING_AGENT_DIR = agentDir;
   process.env.PI_CWD = cwd;
   try {
@@ -207,6 +208,7 @@ export async function handleDeviceJob(job, ctx) {
 
 export async function runNode(input = {}) {
   sealVaultKeyFromEnv();
+  sealInternalTokenFromEnv();
   const opts = { ...parseNodeArgs([]), ...input };
   if (opts.help) {
     console.log(

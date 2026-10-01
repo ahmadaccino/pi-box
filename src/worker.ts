@@ -1,12 +1,10 @@
 import { Container, getContainer } from "@cloudflare/containers";
 import { env } from "cloudflare:workers";
-import { verifyToken } from "@clerk/backend";
 import {
   clearAuthCookie,
   mintAuthCookie,
   sanitizeSession,
   timingSafeEqual,
-  verifyAuthCookie,
 } from "./password";
 import {
   clearNonceCookie,
@@ -23,33 +21,34 @@ import {
   GOOGLE_PLUGINS,
 } from "./oauth";
 import { Mesh } from "./mesh";
-import { isDeviceTokenPath, isMeshDevicePath } from "./mesh-http";
-import { parseMeshId } from "./mesh-state";
-import { isRoutinesApiPath, routineWebhookMeshId } from "./routines";
+import { isMeshDevicePath } from "./mesh-http";
+import {
+  decideAccess,
+  isMeshChatPath,
+  meshActor,
+  requireUser,
+  stableBoxId,
+} from "./access";
+import { containerInternalEnv } from "./internal-auth";
+import { isRoutinesApiPath } from "./routines";
 import { fetchPrettyAsset } from "./pretty-asset";
 
 export { Mesh };
-
-function isMeshChatPath(pathname: string): boolean {
-  return (
-    pathname === "/api/chat" ||
-    pathname === "/api/boxes" ||
-    pathname === "/api/skills" ||
-    /^\/api\/sessions\/[^/]+\/snapshot$/.test(pathname)
-  );
-}
 
 function browserBindingPresent(): boolean {
   return Boolean(env.BROWSER);
 }
 
-export class PiBox extends Container {
-  defaultPort = 8788;
-  sleepAfter = "2h";
-  restored = false;
-  // Sidecar needs these in its own process. Pi bash strips them (container/shell-env.mjs)
-  // and server startup deletes VAULT_ENCRYPTION_KEY from process.env after reading it.
-  envVars = {
+function boxName(id: { name?: string } | undefined): string {
+  const name = id?.name || "";
+  if (!name || name === "cf-singleton-container") return "default";
+  return name;
+}
+
+/** Shared container env. Per-box internal token is applied in the constructor. */
+function containerProcessEnv(boxId: string): Record<string, string> {
+  const internal = containerInternalEnv(env, boxId);
+  return {
     ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY ?? "",
     OPENAI_API_KEY: env.OPENAI_API_KEY ?? "",
     XAI_API_KEY: env.XAI_API_KEY ?? "",
@@ -67,7 +66,29 @@ export class PiBox extends Container {
     PI_BOX_ID: "cloud",
     PI_BOX_NAME: "cloudflare",
     VAULT_ENCRYPTION_KEY: env.VAULT_ENCRYPTION_KEY ?? "",
+    PI_BOX_MESH_ID: internal.PI_BOX_MESH_ID,
+    PI_BOX_INTERNAL_TOKEN: internal.PI_BOX_INTERNAL_TOKEN,
   };
+}
+
+export class PiBox extends Container {
+  defaultPort = 8788;
+  sleepAfter = "2h";
+  restored = false;
+
+  // Sidecar needs these in its own process. Pi bash strips secrets
+  // (container/shell-env.mjs). server startup deletes VAULT_ENCRYPTION_KEY
+  // from process.env after reading it. PI_BOX_INTERNAL_TOKEN is the per-box
+  // HMAC for skill proxies; it is stripped from bash the same way.
+  constructor(ctx: { id: { name?: string } }, envArg: unknown) {
+    super(ctx as never, envArg as never);
+    const boxId = boxName(ctx?.id);
+    Object.defineProperty(this, "envVars", {
+      configurable: true,
+      enumerable: true,
+      get: () => containerProcessEnv(boxId),
+    });
+  }
 
   override onStart() {
     this.restored = false;
@@ -143,6 +164,7 @@ type Env = {
   CLERK_SECRET_KEY?: string;
   PI_BOX_PASSWORD?: string;
   VAULT_ENCRYPTION_KEY?: string;
+  INTERNAL_API_SECRET?: string;
   BROWSER?: unknown;
   CLOUDFLARE_API_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
@@ -168,32 +190,6 @@ function shouldPersist(request: Request): boolean {
   );
 }
 
-async function requireUser(request: Request, workerEnv: Env) {
-  if (workerEnv.PI_BOX_PASSWORD) {
-    const ok = await verifyAuthCookie(request, workerEnv.PI_BOX_PASSWORD);
-    return ok ? { userId: "password" } : null;
-  }
-  if (!workerEnv.CLERK_SECRET_KEY) return { userId: "dev", skip: true };
-  const header = request.headers.get("authorization") || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token) return null;
-  try {
-    const payload = await verifyToken(token, {
-      secretKey: workerEnv.CLERK_SECRET_KEY,
-    });
-    return { userId: String(payload.sub || "") };
-  } catch {
-    return null;
-  }
-}
-
-function stableBoxId(user: { userId: string; skip?: boolean } | null): string {
-  if (!user || user.skip || user.userId === "dev" || user.userId === "password") {
-    return "default";
-  }
-  return sanitizeSession(user.userId);
-}
-
 function sessionOf(request: Request, url: URL) {
   return sanitizeSession(
     url.searchParams.get("session") ||
@@ -209,12 +205,11 @@ function meshOf(workerEnv: Env, meshId: string) {
   return workerEnv.MESH.get(workerEnv.MESH.idFromName(meshId));
 }
 
-function gatewayOk(request: Request, url: URL, workerEnv: Env): boolean {
-  const token = workerEnv.GATEWAY_TOKEN;
-  if (!token) return true;
-  const given =
-    url.searchParams.get("token") || request.headers.get("x-pi-box-token");
-  return given === token;
+function forwardToMesh(request: Request, workerEnv: Env, access: { kind: string; meshId: string }) {
+  const headers = new Headers(request.headers);
+  headers.set("x-pi-box-actor", meshActor(access));
+  headers.set("x-pi-box-mesh", access.meshId);
+  return meshOf(workerEnv, access.meshId).fetch(new Request(request, { headers }));
 }
 
 async function upsertGoogleTokens(
@@ -373,83 +368,22 @@ export default {
       }
     }
 
-    if (isRoutinesApiPath(url.pathname)) {
-      const webhookMesh =
-        request.method === "POST" ? routineWebhookMeshId(url.pathname) : null;
-      if (webhookMesh) {
-        const headers = new Headers(request.headers);
-        headers.set("x-pi-box-mesh", webhookMesh);
-        headers.set("x-pi-box-actor", "webhook");
-        return meshOf(workerEnv, webhookMesh).fetch(new Request(request, { headers }));
-      }
-      const deviceId = request.headers.get("x-pi-box-device") || "";
-      if (deviceId) {
-        const meshId = parseMeshId(deviceId);
-        if (!meshId) return new Response("Unauthorized", { status: 401 });
-        const headers = new Headers(request.headers);
-        headers.set("x-pi-box-actor", "device");
-        headers.set("x-pi-box-mesh", meshId);
-        return meshOf(workerEnv, meshId).fetch(new Request(request, { headers }));
-      }
-      if (request.headers.get("x-pi-box-sidecar") === "1") {
-        const token = workerEnv.GATEWAY_TOKEN || "";
-        const internal = request.headers.get("x-pi-box-internal") || "";
-        const open =
-          !token && !workerEnv.PI_BOX_PASSWORD && !workerEnv.CLERK_SECRET_KEY;
-        if (token) {
-          if (!timingSafeEqual(internal, token)) {
-            return new Response("Unauthorized", { status: 401 });
-          }
-        } else if (!open) {
-          return new Response("Unauthorized", { status: 401 });
-        }
-        const meshId = sanitizeSession(request.headers.get("x-pi-box-mesh"));
-        const headers = new Headers(request.headers);
-        headers.set("x-pi-box-actor", "user");
-        headers.set("x-pi-box-mesh", meshId);
-        return meshOf(workerEnv, meshId).fetch(new Request(request, { headers }));
-      }
-      const routinesUser = await requireUser(request, workerEnv);
-      if (!routinesUser) return new Response("Unauthorized", { status: 401 });
-      if (!gatewayOk(request, url, workerEnv)) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-      const routinesMesh = stableBoxId(routinesUser);
-      const headers = new Headers(request.headers);
-      headers.set("x-pi-box-actor", "user");
-      headers.set("x-pi-box-mesh", routinesMesh);
-      return meshOf(workerEnv, routinesMesh).fetch(new Request(request, { headers }));
-    }
-
-    if (isMeshDevicePath(url.pathname) || isMeshChatPath(url.pathname)) {
-      const deviceHeader = request.headers.get("x-pi-box-device") || "";
-      if (isDeviceTokenPath(url.pathname) || (deviceHeader && url.pathname.includes("/snapshot"))) {
-        const deviceId = request.headers.get("x-pi-box-device") || "";
-        const meshId = parseMeshId(deviceId);
-        if (!meshId) return new Response("Unauthorized", { status: 401 });
-        const headers = new Headers(request.headers);
-        headers.set("x-pi-box-actor", "device");
-        headers.set("x-pi-box-mesh", meshId);
-        return meshOf(workerEnv, meshId).fetch(new Request(request, { headers }));
-      }
-      const user = await requireUser(request, workerEnv);
-      if (!user) return new Response("Unauthorized", { status: 401 });
-      if (!gatewayOk(request, url, workerEnv)) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-      const meshId = stableBoxId(user);
-      const headers = new Headers(request.headers);
-      headers.set("x-pi-box-actor", "user");
-      headers.set("x-pi-box-mesh", meshId);
-      return meshOf(workerEnv, meshId).fetch(new Request(request, { headers }));
+    if (
+      isRoutinesApiPath(url.pathname) ||
+      isMeshDevicePath(url.pathname) ||
+      isMeshChatPath(url.pathname)
+    ) {
+      const access = await decideAccess(request, workerEnv);
+      if (!access.ok) return new Response("Unauthorized", { status: 401 });
+      return forwardToMesh(request, workerEnv, access);
     }
 
     if (url.pathname.startsWith("/api/")) {
-      const user = await requireUser(request, workerEnv);
-      if (!user) return new Response("Unauthorized", { status: 401 });
-      if (!gatewayOk(request, url, workerEnv)) {
+      const access = await decideAccess(request, workerEnv);
+      if (!access.ok || access.kind !== "user" || !access.user) {
         return new Response("Unauthorized", { status: 401 });
       }
+      const user = access.user;
       const authPlugin = url.pathname.match(
         /^\/api\/plugins\/([^/]+)\/authenticate$/,
       );

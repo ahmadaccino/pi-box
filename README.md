@@ -52,7 +52,7 @@ While a turn is running the composer stays enabled. A new message is delivered w
 
 ## Safe actions
 
-Shell commands the model runs cannot see sidecar secrets. Pi's bash tool copies `process.env`; a `spawnHook` strips `VAULT_ENCRYPTION_KEY`, provider keys, `GOOGLE_CLIENT_SECRET`, `BROWSER_CDP_TOKEN`, `CLOUDFLARE_API_TOKEN`, and `GATEWAY_TOKEN` before the child starts. The sidecar also reads the vault key once at startup and deletes it from `process.env`. Details: [docs/vault.md](docs/vault.md).
+Shell commands the model runs cannot see sidecar secrets. Pi's bash tool copies `process.env`; a `spawnHook` strips `VAULT_ENCRYPTION_KEY`, provider keys, `GOOGLE_CLIENT_SECRET`, `BROWSER_CDP_TOKEN`, `CLOUDFLARE_API_TOKEN`, `GATEWAY_TOKEN`, and `PI_BOX_INTERNAL_TOKEN` before the child starts. The sidecar also reads the vault key once at startup and deletes it from `process.env`. Details: [docs/vault.md](docs/vault.md).
 
 Plugin calls that mutate outside data (delete, publish/deploy, calendar writes, payments) block on an approval card: **Allow once**, **Always allow** (saved per tool and target in the agent dir), or **Deny**. If nobody is connected to the chat stream, the request expires after 10 minutes and counts as Deny.
 
@@ -137,6 +137,8 @@ Keep these Worker secrets (do not commit values):
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `CLOUDFLARE_API_TOKEN` (passed into the container as `BROWSER_CDP_TOKEN`)
+
+The routines skill calls back from the container to `/api/routines`. That call carries `PI_BOX_INTERNAL_TOKEN`, a per-box HMAC minted by the Worker. Set `INTERNAL_API_SECRET` only if you want a dedicated key; otherwise the Worker derives it from `VAULT_ENCRYPTION_KEY`, then `PI_BOX_PASSWORD`, then `CLERK_SECRET_KEY`. Do not set `GATEWAY_TOKEN` to unblock routines. A password cookie or Clerk session is accepted without that header, so the web UI keeps working if `GATEWAY_TOKEN` is set later. `GATEWAY_TOKEN` is still the OAuth state fallback when `GOOGLE_CLIENT_SECRET` is unset.
 
 ```bash
 npx wrangler r2 bucket create pi-box-state

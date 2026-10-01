@@ -17,7 +17,7 @@ When the run finishes, the result is stored on the routine and a notice is appen
 
 ## HTTP
 
-User cookie or Clerk session, except the webhook (bearer key only) and the in-box agent proxy.
+User cookie or Clerk session, except the webhook (bearer key only) and the in-box agent proxy. A logged-in browser session is enough even when `GATEWAY_TOKEN` is set; the web UI does not send that token.
 
 | Method | Path | |
 | --- | --- | --- |
@@ -38,7 +38,7 @@ The panel is `/routines` (Pause, Resume, Run now, Delete, next fire, last status
 
 The `routines` skill tells the model to propose a routine for recurring asks. Tools are HTTP on this machine:
 
-- Cloud sidecar: `http://127.0.0.1:8788/api/routines`, proxied to Mesh with the gateway token (the model does not see the token).
+- Cloud sidecar: `http://127.0.0.1:8788/api/routines`, proxied to Mesh with a per-box internal token (the model does not see the token). The Worker mints it from `INTERNAL_API_SECRET` if that is set, otherwise from `VAULT_ENCRYPTION_KEY`, `PI_BOX_PASSWORD`, or `CLERK_SECRET_KEY`. It is accepted only on these skill-proxy routes.
 - A joined device: `PI_BOX_ROUTINES_URL` (loopback). The node attaches the device secret.
 
 Set `PI_BOX_PUBLIC_URL` on the Worker so the cloud computer can reach Mesh. Chat requests also stamp that origin onto the sidecar.

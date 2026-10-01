@@ -16,9 +16,10 @@ import { handleSessionControl } from "./session-control.mjs";
 import { openLiveTurn } from "./live-turn.mjs";
 import { sealVaultKeyFromEnv } from "./vault.mjs";
 import { createAgentRuntime, hasProviderKey } from "./agent.mjs";
-import { handleRoutinesProxy, rememberRoutinesRoute } from "./routines-proxy.mjs";
+import { handleRoutinesProxy, rememberRoutinesRoute, sealInternalTokenFromEnv } from "./routines-proxy.mjs";
 
 sealVaultKeyFromEnv();
+sealInternalTokenFromEnv();
 
 const PORT = Number(process.env.PORT || 8788);
 const HOST = process.env.HOST || "0.0.0.0";

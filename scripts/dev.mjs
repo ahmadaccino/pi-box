@@ -18,6 +18,11 @@ import { handleMeshRequest, isDeviceTokenPath, isMeshDevicePath } from "../src/m
 import { failSseBody, planChatTurn, sseChunk, waitingSseBody } from "../src/mesh-chat.ts";
 import { sanitizeSession } from "../src/password.ts";
 import {
+  containerInternalEnv,
+  isInternalProxyPath,
+  sidecarCredentialOk,
+} from "../src/internal-auth.ts";
+import {
   RoutineBook,
   appendRoutineTranscript,
   assistantTextFromSse,
@@ -53,17 +58,23 @@ const types = {
   ".json": "application/json",
 };
 
+const internalEnv = containerInternalEnv(process.env, "default");
+const agentEnv = {
+  ...process.env,
+  PORT: String(AGENT_PORT),
+  HOST: "127.0.0.1",
+  PI_CWD: process.env.PI_CWD || path.join(root, "workspace"),
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || path.join(root, ".pi-agent"),
+  PI_PLUGINS_DIR: process.env.PI_PLUGINS_DIR || path.join(root, "plugins"),
+  PI_BOX_PUBLIC_URL: process.env.PI_BOX_PUBLIC_URL || `http://127.0.0.1:${UI_PORT}`,
+  PI_BOX_MESH_ID: internalEnv.PI_BOX_MESH_ID,
+  PI_BOX_INTERNAL_TOKEN: internalEnv.PI_BOX_INTERNAL_TOKEN,
+};
+delete agentEnv.INTERNAL_API_SECRET;
+
 const agent = spawn(process.execPath, ["server.mjs"], {
   cwd: path.join(root, "container"),
-  env: {
-    ...process.env,
-    PORT: String(AGENT_PORT),
-    HOST: "127.0.0.1",
-    PI_CWD: process.env.PI_CWD || path.join(root, "workspace"),
-    PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || path.join(root, ".pi-agent"),
-    PI_PLUGINS_DIR: process.env.PI_PLUGINS_DIR || path.join(root, "plugins"),
-    PI_BOX_PUBLIC_URL: process.env.PI_BOX_PUBLIC_URL || `http://127.0.0.1:${UI_PORT}`,
-  },
+  env: agentEnv,
   stdio: "inherit",
 });
 agent.on("exit", (code) => {
@@ -142,13 +153,30 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (
+  const sidecarCall =
+    req.headers["x-pi-box-sidecar"] === "1" &&
+    (url.pathname.startsWith("/api/") || url.pathname === "/healthz");
+  if (sidecarCall) {
+    const meshHeader = req.headers["x-pi-box-mesh"];
+    const meshId = sanitizeSession(Array.isArray(meshHeader) ? meshHeader[0] : meshHeader);
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (value == null) continue;
+      headers.set(key, Array.isArray(value) ? value.join(", ") : String(value));
+    }
+    const allowed =
+      isInternalProxyPath(url.pathname) &&
+      sidecarCredentialOk(new Request(url, { headers }), process.env, meshId);
+    if (!allowed) {
+      sendJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+  } else if (
     password &&
     (url.pathname.startsWith("/api/") || url.pathname === "/healthz") &&
     url.pathname !== "/api/config" &&
     !url.pathname.startsWith("/api/oauth/google/callback") &&
     !/^\/api\/routines\/rt\.[^/]+\/webhook$/.test(url.pathname) &&
-    !(req.headers["x-pi-box-sidecar"] === "1" && url.pathname.startsWith("/api/routines")) &&
     !(req.headers["x-pi-box-device"] && url.pathname.startsWith("/api/routines")) &&
     !isDeviceTokenPath(url.pathname) &&
     !(req.headers["x-pi-box-device"] && /^\/api\/sessions\/[^/]+\/snapshot$/.test(url.pathname))
