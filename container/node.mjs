@@ -30,6 +30,7 @@ import {
   userAuthHeaders,
 } from "./node-logic.mjs";
 import { collectSnapshot, restoreSnapshot, SNAPSHOT_R2 } from "./snapshot.mjs";
+import { sealVaultKeyFromEnv } from "./vault.mjs";
 
 export async function loginWithPassword(origin, password) {
   const res = await fetch(new URL("/api/login", origin), {
@@ -163,6 +164,7 @@ export async function handleDeviceJob(job, ctx) {
     if (v == null) continue;
     process.env[k] = String(v);
   }
+  sealVaultKeyFromEnv();
   process.env.PI_CODING_AGENT_DIR = agentDir;
   process.env.PI_CWD = cwd;
   try {
@@ -203,6 +205,7 @@ export async function handleDeviceJob(job, ctx) {
 }
 
 export async function runNode(input = {}) {
+  sealVaultKeyFromEnv();
   const opts = { ...parseNodeArgs([]), ...input };
   if (opts.help) {
     console.log(

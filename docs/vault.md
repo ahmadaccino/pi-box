@@ -24,7 +24,7 @@ without changing this contract.
 ## Encryption
 
 - Algorithm: AES-256-GCM (Node crypto), random 12-byte IV, 16-byte auth tag.
-- Key: VAULT_ENCRYPTION_KEY, 32-byte base64.
+- Key: VAULT_ENCRYPTION_KEY, 32-byte base64. The sidecar copies it into memory at startup and removes the env var.
 - Generate with openssl rand, then base64-encode 32 bytes.
 - Store: PI_CODING_AGENT_DIR/vault/items.json (ciphertext only). Mode 0600, directory 0700.
 - If the env var is unset, the sidecar uses an all-zero local-dev key and
@@ -37,9 +37,11 @@ without changing this contract.
 Trusted boundary: the box filesystem plus the sidecar process.
 
 - Language model / Pi session: cannot decrypt. List and fill responses have no secret values. Setup tokens carry kind, label, origin, identifierType only.
+- Model shell: Pi's bash tool would otherwise inherit the sidecar environment. `container/shell-env.mjs` strips `VAULT_ENCRYPTION_KEY`, provider API keys, `GOOGLE_CLIENT_SECRET`, `BROWSER_CDP_TOKEN`, `CLOUDFLARE_API_TOKEN`, `GATEWAY_TOKEN`, and the other names in `SECRET_ENV_NAMES` before every bash child. `env` inside a bash tool call does not show them. Provider keys stay in the sidecar process so the model runtime can authenticate; they are not exported to the shell.
+- Vault key in the sidecar process: `server.mjs` (and the device node) calls `sealVaultKeyFromEnv()` at startup. That reads `VAULT_ENCRYPTION_KEY` once into memory and deletes it from `process.env`, so later shell commands cannot inherit it and a child cannot read it back from the parent environment.
 - Vault page in the user browser: sees secrets while typing. After save the page does not display the secret.
 - Sidecar process (container/vault.mjs): can decrypt. It holds the key and plaintext in memory during save/fill.
-- Box filesystem: ciphertext lives here. Anyone with the key env var and the files can decrypt. Disk encryption and file modes are the next layer.
+- Box filesystem: ciphertext lives here. Anyone with the key and the files can decrypt. Disk encryption and file modes are the next layer.
 - browser.mjs fillNative: receives claims in-process for native inject. Must not log or return them.
 
 This is not a multi-tenant HSM. Do not put the local-dev key on a shared host.

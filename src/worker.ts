@@ -46,6 +46,8 @@ export class PiBox extends Container {
   defaultPort = 8788;
   sleepAfter = "2h";
   restored = false;
+  // Sidecar needs these in its own process. Pi bash strips them (container/shell-env.mjs)
+  // and server startup deletes VAULT_ENCRYPTION_KEY from process.env after reading it.
   envVars = {
     ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY ?? "",
     OPENAI_API_KEY: env.OPENAI_API_KEY ?? "",
