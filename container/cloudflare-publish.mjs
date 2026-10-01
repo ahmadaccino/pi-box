@@ -5,6 +5,7 @@
 import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import path from "node:path";
+import { stripSecretEnv } from "./shell-env.mjs";
 import { getOAuthToken } from "./vault.mjs";
 
 const CWD = process.env.PI_CWD || "/workspace";
@@ -54,7 +55,7 @@ export async function publishSite({ dir, name } = {}) {
     const child = spawn("npx", args, {
       cwd: target,
       env: {
-        ...process.env,
+        ...stripSecretEnv(process.env),
         CLOUDFLARE_API_TOKEN: token,
       },
       stdio: ["ignore", "pipe", "pipe"],

@@ -37,3 +37,4 @@ curl -sS -X POST "$BASE/api/plugins/google-calendar/proxy" \
 - Only `www.googleapis.com` and `calendar.googleapis.com`.
 - Never attach Authorization. The sidecar injects the vault token and refreshes it.
 - Confirm times and timezone with the user before creating events.
+- Creates, updates, and deletes wait for an approval card (Allow once / Always allow / Deny). Do not claim the event was saved until the tool result says it succeeded.

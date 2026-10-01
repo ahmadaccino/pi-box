@@ -224,12 +224,45 @@ header {
 
 #composer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 8px;
   padding: 12px 14px 16px;
   border-top: 1px solid var(--line);
   background: #14120e;
 }
+#stop {
+  background: transparent;
+  color: var(--bad);
+  border: 1px solid var(--bad);
+}
+#stop[hidden] { display: none; }
+.card {
+  border: 1px solid var(--line);
+  background: #16140f;
+  padding: 12px;
+  max-width: 640px;
+}
+.card-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 8px;
+}
+.card-summary, .card-line, .card-subject, .card-result {
+  margin: 0 0 8px;
+}
+.card-subject { font-weight: 600; }
+.card-body {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--mute);
+}
+.card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.card-actions button { min-height: 36px; }
 textarea {
   resize: none;
   min-height: 44px;
