@@ -24,12 +24,12 @@ curl -sS "$BASE/api/routines"
 
 ## Create a cron routine
 
-Five-field cron, or `@every Nm` with N at least 5. The clock is the routine timezone (default the user timezone).
+Five-field cron, or `@every Nm` with N at least 5. The clock is the routine timezone (default the user timezone). Pass `botId` (this bot's id from AGENTS.md) so the routine belongs to that bot. Omit it for the default bot.
 
 ```bash
 curl -sS -X POST "$BASE/api/routines" \
   -H 'content-type: application/json' \
-  -d '{"name":"weekday digest","prompt":"Summarize overnight mail","trigger":"cron","schedule":"0 9 * * 1-5","timezone":"America/New_York"}'
+  -d '{"name":"weekday digest","prompt":"Summarize overnight mail","trigger":"cron","schedule":"0 9 * * 1-5","timezone":"America/New_York","botId":"default"}'
 ```
 
 ## Create a webhook routine

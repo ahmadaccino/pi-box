@@ -31,6 +31,7 @@ import {
 } from "./access";
 import { containerInternalEnv } from "./internal-auth";
 import { isRoutinesApiPath } from "./routines";
+import { isBotsApiPath } from "./bots";
 import { fetchPrettyAsset } from "./pretty-asset";
 
 export { Mesh };
@@ -202,7 +203,8 @@ function shouldPersist(request: Request): boolean {
   return (
     url.pathname.startsWith("/api/vault") ||
     url.pathname === "/api/chat" ||
-    url.pathname.startsWith("/api/plugins")
+    url.pathname.startsWith("/api/plugins") ||
+    url.pathname.includes("/memory")
   );
 }
 
@@ -387,6 +389,7 @@ export default {
 
     if (
       isRoutinesApiPath(url.pathname) ||
+      isBotsApiPath(url.pathname) ||
       isMeshDevicePath(url.pathname) ||
       isMeshChatPath(url.pathname)
     ) {

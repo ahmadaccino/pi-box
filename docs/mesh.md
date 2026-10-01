@@ -72,6 +72,10 @@ Create the bucket once:
 npx wrangler r2 bucket create pi-box-state
 ```
 
+## Bots
+
+Named bots, their chat list, and transcripts live in this Durable Object (`bots` key). The container keeps each bot's instructions, memory, approvals, and Pi session files, and the snapshot now includes `agents/`, `skills/`, root `approvals.json` / `AGENTS.md` / `memory.json`, and named workspaces. See [bots.md](bots.md).
+
 ## Routines
 
 Cron and webhook routines live in this Durable Object's SQLite table `routine_records`. The heartbeat alarm also claims due cron and places a fresh turn (online device that matches, otherwise cloud). See [routines.md](routines.md).

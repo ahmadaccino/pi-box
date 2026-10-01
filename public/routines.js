@@ -6,6 +6,8 @@
   const createForm = document.getElementById("create");
   const trigger = document.getElementById("trigger");
   const schedule = document.getElementById("schedule");
+  const botSelect = document.getElementById("bot");
+  let botNames = new Map();
   let clerk = null;
 
   function el(tag, cls, text) {
@@ -67,7 +69,7 @@
       const meta = el(
         "p",
         "meta",
-        `${triggerLabel(routine)} · ${routine.timezone} · next ${formatWhen(routine.nextRunAt, routine.timezone)} · last ${state}`,
+        `${botNames.get(routine.botId) || routine.botId || "Assistant"} · ${triggerLabel(routine)} · ${routine.timezone} · next ${formatWhen(routine.nextRunAt, routine.timezone)} · last ${state}`,
       );
       const badge = el("div", "st " + state, state);
       const actions = el("div", "actions");
@@ -175,6 +177,7 @@
       prompt: document.getElementById("prompt").value,
       trigger: trigger.value,
       timezone: tzInput.value.trim() || undefined,
+      botId: botSelect?.value || undefined,
     };
     if (trigger.value === "cron") body.schedule = schedule.value;
     try {
@@ -205,6 +208,24 @@
     });
   }
 
+  async function loadBotNames() {
+    if (!botSelect) return;
+    try {
+      const data = await call("/api/bots");
+      botNames = new Map((data.bots || []).map((bot) => [bot.id, bot.name]));
+      const selected = botSelect.value;
+      botSelect.innerHTML = "";
+      for (const bot of data.bots || []) {
+        const opt = el("option", "", bot.name || bot.id);
+        opt.value = bot.id;
+        botSelect.append(opt);
+      }
+      if (selected) botSelect.value = selected;
+    } catch {
+      /* routines still work without the bot list */
+    }
+  }
+
   async function boot() {
     const cfg = await fetch("/api/config").then((r) => r.json()).catch(() => ({}));
     if (cfg.clerkPublishableKey) {
@@ -212,6 +233,7 @@
       clerk = new window.Clerk(cfg.clerkPublishableKey);
       await clerk.load();
     }
+    await loadBotNames();
     await load();
   }
 

@@ -66,6 +66,7 @@ export type Routine = {
   require: string[];
   history: RoutineRun[];
   lastStatus?: string;
+  botId?: string;
 };
 
 export type RoutineNotice = {
@@ -93,6 +94,7 @@ export type ClaimedRun = {
   jobId: string;
   decision: PlaceResult;
   job: Job;
+  botId: string;
 };
 
 type SqlExec = {
@@ -528,6 +530,11 @@ function mintRunId(): string {
   return hex(bytes);
 }
 
+function cleanBotId(raw: unknown): string {
+  const id = String(raw || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+  return id || "default";
+}
+
 function cleanRequire(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -550,6 +557,7 @@ export function publicRoutine(routine: Routine, origin: string) {
     nextRunAt: routine.nextRunAt ?? null,
     lastStatus: routine.lastStatus ?? routine.history[0]?.status ?? null,
     require: routine.require,
+    botId: routine.botId || "default",
     webhookUrl:
       routine.trigger.type === "webhook"
         ? `${origin.replace(/\/+$/, "")}/api/routines/${routine.id}/webhook`
@@ -614,6 +622,7 @@ function startRun(
       sessionId,
       routineId: routine.id,
       runId,
+      botId: routine.botId || "default",
     },
   });
   const decision = planned.decision;
@@ -649,6 +658,7 @@ function startRun(
     jobId,
     decision,
     job: planned.job,
+    botId: routine.botId || "default",
   };
 }
 
@@ -795,7 +805,9 @@ export async function handleRoutinesRequest(opts: RoutinesHttpOpts): Promise<Res
   }
 
   if (method === "GET" && path === "/api/routines") {
+    const botFilter = url.searchParams.get("botId");
     const routines = [...book.routines.values()]
+      .filter((routine) => !botFilter || (routine.botId || "default") === botFilter)
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((routine) => publicRoutine(routine, origin));
     return json({ routines, settings: publicSettings(book.settings) });
@@ -846,6 +858,7 @@ export async function handleRoutinesRequest(opts: RoutinesHttpOpts): Promise<Res
       nextRunAt: null,
       require: cleanRequire(value.require),
       history: [],
+      botId: cleanBotId(value.botId),
     };
     let webhookKey: string | undefined;
     if (triggerName === "webhook") {

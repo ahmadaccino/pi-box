@@ -26,19 +26,30 @@ const pwform = document.getElementById("pwform");
 const pw = document.getElementById("pw");
 const pwerr = document.getElementById("pwerr");
 const newchat = document.getElementById("newchat");
+const newbot = document.getElementById("newbot");
+const chatsEl = document.getElementById("chats");
+const botSettings = document.getElementById("bot-settings");
+const botSheet = document.getElementById("bot-sheet");
+const botForm = document.getElementById("bot-form");
+const showBots = document.getElementById("show-bots");
+
+const BOT_COLORS = ["#e6a23c", "#8fbe8b", "#d36b5e", "#7aa2d6", "#c58bbd", "#d6c48a"];
 
 let clerk = null;
 let boxes = [];
 let current = null;
-let chatSession = localStorage.getItem("pi-box-chat") || crypto.randomUUID();
+let bots = [];
+let currentBot = null;
+let sessions = [];
+let chatSession = localStorage.getItem("pi-box-chat") || "";
+let sheetBotId = null;
+let sheetColor = BOT_COLORS[0];
 let computerSessionId = null;
 let computerTimer = null;
 let turnLive = false;
 let pushReady = false;
 let pushPublicKey = "";
 const pending = [];
-
-localStorage.setItem("pi-box-chat", chatSession);
 
 function computerPane() {
   return document.getElementById("computer-pane");
@@ -241,15 +252,40 @@ function capsLine(box) {
   return on.join(" · ") || box.kind || "box";
 }
 
-function renderRoster() {
+function renderBots() {
+  if (!roster) return;
   roster.innerHTML = "";
-  for (const box of boxes) {
-    const btn = el("button", "box-row" + (current?.id === box.id ? " active" : ""));
+  for (const bot of bots) {
+    const btn = el("button", "box-row" + (currentBot?.id === bot.id ? " active" : ""));
     btn.type = "button";
-    btn.append(el("span", "name", box.name || box.id));
-    btn.append(el("span", "caps", capsLine(box)));
-    btn.addEventListener("click", () => selectBox(box.id));
+    const mark = el("span", "bot-mark");
+    mark.style.background = bot.avatarColor || "#e6a23c";
+    const copy = el("span", "bot-copy");
+    copy.append(el("span", "name", bot.name || bot.id));
+    if (bot.description) copy.append(el("span", "caps", bot.description));
+    btn.append(mark, copy);
+    btn.addEventListener("click", () => {
+      selectBot(bot.id);
+      document.querySelector("aside")?.classList.remove("open");
+    });
     roster.append(btn);
+  }
+}
+
+function renderChats() {
+  if (!chatsEl) return;
+  chatsEl.innerHTML = "";
+  for (const session of sessions) {
+    const btn = el("button", "box-row" + (session.id === chatSession ? " active" : ""));
+    btn.type = "button";
+    const copy = el("span", "bot-copy");
+    copy.append(el("span", "name", session.title || "New chat"));
+    btn.append(copy);
+    btn.addEventListener("click", () => {
+      selectSession(session.id);
+      document.querySelector("aside")?.classList.remove("open");
+    });
+    chatsEl.append(btn);
   }
 }
 
@@ -261,7 +297,11 @@ function renderSkills(box) {
     return;
   }
   for (const s of skills) {
-    const chip = el("span", "chip" + (s.available ? "" : " off"), s.name);
+    const chip = el(
+      "span",
+      "chip" + (s.available ? "" : " off") + (s.source === "user" ? " user" : ""),
+      s.source === "user" ? `${s.name} · yours` : s.name,
+    );
     chip.title = s.available
       ? s.description
       : `needs ${ (s.missing || s.requires || []).join(", ") }`;
@@ -269,17 +309,95 @@ function renderSkills(box) {
   }
 }
 
-function selectBox(id) {
-  current = boxes.find((b) => b.id === id) || boxes[0];
+function applyMeshBox(box) {
+  current = box || null;
   if (!current) return;
-  localStorage.setItem("pi-box-session", current.id);
-  boxName.textContent = current.name;
-  boxMeta.textContent = capsLine(current);
-  renderRoster();
   renderSkills(current);
   startComputer(current);
+}
+
+async function selectBot(id) {
+  currentBot = bots.find((bot) => bot.id === id) || bots[0] || null;
+  if (!currentBot) return;
+  localStorage.setItem("pi-box-bot", currentBot.id);
+  boxName.textContent = currentBot.name;
+  boxMeta.textContent = currentBot.description || "";
+  renderBots();
+  await loadSessions();
+}
+
+function chatKey(botId) {
+  return `pi-box-chat:${botId || "default"}`;
+}
+
+async function loadSessions() {
+  if (!currentBot) return;
+  const res = await fetch(`/api/bots/${encodeURIComponent(currentBot.id)}/sessions`, {
+    headers: await authHeader(),
+  });
+  if (!res.ok) return;
+  const data = await res.json();
+  sessions = data.sessions || [];
+  const saved = localStorage.getItem(chatKey(currentBot.id))
+    || (currentBot.id === "default" ? localStorage.getItem("pi-box-chat") : "");
+  let session = sessions.find((item) => item.id === saved) || sessions[0];
+  if (!session) session = await createSession(saved || "");
+  if (!session) session = await createSession("");
+  if (session) await selectSession(session.id);
+  else renderChats();
+}
+
+async function createSession(id) {
+  if (!currentBot) return null;
+  const body = {};
+  if (id) body.id = id;
+  const res = await fetch(`/api/bots/${encodeURIComponent(currentBot.id)}/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (data.session && !sessions.some((item) => item.id === data.session.id)) {
+    sessions.unshift(data.session);
+  }
+  return data.session || null;
+}
+
+async function selectSession(id) {
+  chatSession = id;
+  if (currentBot) localStorage.setItem(chatKey(currentBot.id), id);
+  renderChats();
+  await loadTranscript();
+  input?.focus();
+}
+
+async function loadTranscript() {
+  if (!log || !chatSession) return;
   log.innerHTML = "";
-  input.focus();
+  const res = await fetch(`/api/sessions/${encodeURIComponent(chatSession)}/transcript`, {
+    headers: await authHeader(),
+  });
+  if (!res.ok) return;
+  const data = await res.json();
+  for (const message of data.messages || []) {
+    if (message.role === "user") addUser(message.text || "");
+    else {
+      const asst = addAssistant();
+      asst.append(message.text || "");
+    }
+  }
+}
+
+async function loadBots() {
+  const res = await fetch("/api/bots", { headers: await authHeader() });
+  if (!res.ok) throw new Error("bots " + res.status);
+  const data = await res.json();
+  bots = data.bots || [];
+  const saved = localStorage.getItem("pi-box-bot");
+  const pick = bots.find((bot) => bot.id === saved) || bots.find((bot) => bot.id === "default") || bots[0];
+  if (pick) await selectBot(pick.id);
+  else renderBots();
 }
 
 function addUser(text, files) {
@@ -295,7 +413,7 @@ function addUser(text, files) {
 
 function addAssistant() {
   const wrap = el("article", "msg assistant");
-  wrap.append(el("div", "who", current?.name || "pi-box"));
+  wrap.append(el("div", "who", currentBot?.name || "pi-box"));
   const bubble = el("div", "bubble");
   wrap.append(bubble);
   log.append(wrap);
@@ -637,7 +755,7 @@ function userAttachments(files) {
 }
 
 async function chat(message, files = []) {
-  if (!current) return;
+  if (!current || !currentBot || !chatSession) return;
   addUser(message, files);
   const asst = addAssistant();
   turnLive = true;
@@ -653,10 +771,16 @@ async function chat(message, files = []) {
       body = new FormData();
       body.set("message", message);
       body.set("session", chatSession);
+      body.set("botId", currentBot.id);
       for (const file of files) body.append("file", file, file.name);
     } else {
       headers["content-type"] = "application/json";
-      body = JSON.stringify({ message, session: chatSession, boxId: current.id });
+      body = JSON.stringify({
+        message,
+        session: chatSession,
+        botId: currentBot.id,
+        boxId: current.id,
+      });
     }
     const res = await fetch(`/api/chat?session=${encodeURIComponent(chatSession)}`, {
       method: "POST",
@@ -713,6 +837,8 @@ async function chat(message, files = []) {
       }
     }
     if (statusEl.textContent === "running") setStatus("idle");
+    await refreshSessionList();
+    await refreshSkills();
   } catch (err) {
     asst.append(String(err));
     setStatus("error", "err");
@@ -816,15 +942,42 @@ input.addEventListener("keydown", (e) => {
   }
 });
 
+async function refreshSessionList() {
+  if (!currentBot) return;
+  try {
+    const res = await fetch(`/api/bots/${encodeURIComponent(currentBot.id)}/sessions`, {
+      headers: await authHeader(),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    sessions = data.sessions || [];
+    renderChats();
+  } catch {
+    /* title refresh is optional */
+  }
+}
+
+async function refreshSkills() {
+  try {
+    const res = await fetch("/api/skills", { headers: await authHeader() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (current) current.skills = data.skills || [];
+    renderSkills(current);
+  } catch {
+    /* catalog refresh is optional */
+  }
+}
+
 async function loadBoxes() {
   if (pushPublicKey) void enablePush(pushPublicKey);
   const res = await fetch("/api/boxes", { headers: await authHeader() });
   if (!res.ok) throw new Error("boxes " + res.status);
   const data = await res.json();
   boxes = data.boxes || [];
-  const saved = localStorage.getItem("pi-box-session");
-  selectBox(saved && boxes.some((b) => b.id === saved) ? saved : boxes[0]?.id);
+  applyMeshBox(boxes[0]);
   await loadMachines();
+  await loadBots();
   await pollRoutineFeed();
 }
 
@@ -841,12 +994,139 @@ function showGate() {
 }
 
 if (newchat) {
-  newchat.addEventListener("click", () => {
-    chatSession = crypto.randomUUID();
-    localStorage.setItem("pi-box-chat", chatSession);
-    if (log) log.innerHTML = "";
+  newchat.addEventListener("click", async () => {
+    const session = await createSession("");
+    if (!session) return;
+    await selectSession(session.id);
     setStatus("new chat");
-    input?.focus();
+  });
+}
+
+function paintSwatches() {
+  const host = document.getElementById("bot-colors");
+  if (!host) return;
+  host.innerHTML = "";
+  for (const color of BOT_COLORS) {
+    const btn = el("button", "swatch" + (color === sheetColor ? " on" : ""));
+    btn.type = "button";
+    btn.style.background = color;
+    btn.title = color;
+    btn.addEventListener("click", () => {
+      sheetColor = color;
+      paintSwatches();
+    });
+    host.append(btn);
+  }
+}
+
+function openSheet(bot) {
+  if (!botSheet || !botForm) return;
+  sheetBotId = bot?.id || null;
+  sheetColor = bot?.avatarColor || BOT_COLORS[0];
+  const title = document.getElementById("bot-sheet-title");
+  if (title) title.textContent = bot ? bot.name : "New bot";
+  document.getElementById("bot-name").value = bot?.name || "";
+  document.getElementById("bot-description").value = bot?.description || "";
+  document.getElementById("bot-instructions").value = bot?.instructions || "";
+  const del = document.getElementById("bot-delete");
+  if (del) del.hidden = !bot || bot.id === "default";
+  paintSwatches();
+  renderMemory([]);
+  botSheet.hidden = false;
+  if (bot) loadMemory(bot.id);
+}
+
+function closeSheet() {
+  if (botSheet) botSheet.hidden = true;
+}
+
+function renderMemory(facts) {
+  const host = document.getElementById("bot-memory");
+  if (!host) return;
+  host.innerHTML = "";
+  if (!facts.length) {
+    host.append(el("p", "lede", sheetBotId ? "No facts yet." : "Save the bot, then facts show up here."));
+    return;
+  }
+  for (const fact of facts) {
+    const row = el("div", "memory-row");
+    const copy = el("div");
+    copy.append(el("p", "", fact.text || ""));
+    copy.append(el("p", "memory-kind", fact.kind === "log" ? `log ${fact.at || ""}`.trim() : "profile"));
+    const del = el("button", "ghost", "Delete");
+    del.type = "button";
+    del.addEventListener("click", () => forgetFact(fact.id));
+    row.append(copy, del);
+    host.append(row);
+  }
+}
+
+async function loadMemory(botId) {
+  try {
+    const res = await fetch(`/api/bots/${encodeURIComponent(botId)}/memory`, {
+      headers: await authHeader(),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const facts = [
+      ...(data.profile || []).map((fact) => ({ ...fact, kind: "profile" })),
+      ...(data.log || []).map((fact) => ({ ...fact, kind: "log" })),
+    ];
+    renderMemory(facts);
+  } catch {
+    /* memory view is optional until the container is up */
+  }
+}
+
+async function forgetFact(id) {
+  if (!sheetBotId || !id) return;
+  await fetch(`/api/bots/${encodeURIComponent(sheetBotId)}/memory/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: await authHeader(),
+  });
+  await loadMemory(sheetBotId);
+}
+
+if (newbot) newbot.addEventListener("click", () => openSheet(null));
+if (botSettings) {
+  botSettings.addEventListener("click", () => {
+    if (currentBot) openSheet(currentBot);
+  });
+}
+document.getElementById("bot-sheet-close")?.addEventListener("click", closeSheet);
+document.getElementById("bot-delete")?.addEventListener("click", async () => {
+  if (!sheetBotId || sheetBotId === "default") return;
+  const res = await fetch(`/api/bots/${encodeURIComponent(sheetBotId)}`, {
+    method: "DELETE",
+    headers: await authHeader(),
+  });
+  if (!res.ok) return;
+  closeSheet();
+  await loadBots();
+});
+botForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const body = {
+    name: document.getElementById("bot-name").value,
+    description: document.getElementById("bot-description").value,
+    avatarColor: sheetColor,
+    instructions: document.getElementById("bot-instructions").value,
+  };
+  const creating = !sheetBotId;
+  const res = await fetch(creating ? "/api/bots" : `/api/bots/${encodeURIComponent(sheetBotId)}`, {
+    method: creating ? "POST" : "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return;
+  const data = await res.json();
+  if (creating && data.bot?.id) localStorage.setItem("pi-box-bot", data.bot.id);
+  closeSheet();
+  await loadBots();
+});
+if (showBots) {
+  showBots.addEventListener("click", () => {
+    document.querySelector("aside")?.classList.toggle("open");
   });
 }
 

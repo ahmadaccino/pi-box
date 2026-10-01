@@ -20,7 +20,7 @@ Every pi-box **indexes** `SKILL.md` files, **lists** them on the box, and **inje
 
 Pi only receives skills where `available: true` (progressive disclosure, [Agent Skills](https://agentskills.io/specification)).
 
-Drop a folder with `SKILL.md` in `container/skills/` or ship an [Agent Plugin](https://agent-plugins.org/specification) under `plugins/<name>/` (`plugin.json` + `skills/`).
+Drop a folder with `SKILL.md` in `container/skills/` or ship an [Agent Plugin](https://agent-plugins.org/specification) under `plugins/<name>/` (`plugin.json` + `skills/`). The agent can also save a procedure as a user skill under `PI_CODING_AGENT_DIR/skills/<name>/SKILL.md`. Those show up in the skills list for every bot.
 
 Shipped packs:
 
@@ -44,9 +44,15 @@ Open `/vault` to enter passwords and cards; the model only sees opaque handles. 
 
 Real browser sessions (Playwright locally, Cloudflare Browser Rendering in the cloud) expose a live computer pane when the box has `browser`. Details: [docs/browser.md](docs/browser.md).
 
+## Bots, history, and memory
+
+The sidebar is a list of **bots**, not anonymous chats. Each bot has a name, description, avatar color, its own instructions (`AGENTS.md`), and its own workspace. The original chat is the default bot (`Assistant`). Routines and approval rules belong to a bot. User skills (`save_skill`) are shared.
+
+Chats are stored on the server per bot. Opening the app on another device reloads the bot's chat list and transcript. Pi session files are still snapshotted with the agent directory. Profile facts stay in the prompt; dated log facts are searched with `memory_search`. Details: [docs/bots.md](docs/bots.md).
+
 ## Talk to your boxes
 
-Web UI: left roster of chats, machines pane in the aside, thread on the right. The composer takes paste, drag-drop, and a file picker. The transcript renders markdown, tables, math, and inline cards (approval, ready-to-send, question, file). Clerk if `CLERK_SECRET_KEY` is set; local mock skips auth. Mesh placement is documented in [docs/mesh.md](docs/mesh.md). Attachments, cards, search, and notifications: [docs/transcript.md](docs/transcript.md).
+Web UI: bots and their chats on the left, machines pane in the aside, thread on the right. Settings on a bot edits its instructions and memory. The composer takes paste, drag-drop, and a file picker. The transcript renders markdown, tables, math, and inline cards (approval, ready-to-send, question, file). Clerk if `CLERK_SECRET_KEY` is set; local mock skips auth. Mesh placement is documented in [docs/mesh.md](docs/mesh.md). Attachments, cards, search, and notifications: [docs/transcript.md](docs/transcript.md).
 
 While a turn is running the composer stays enabled. A new message is delivered with Pi `steer` (the button reads Steer) instead of starting another turn. Stop calls Pi `abort` on that session.
 
@@ -159,7 +165,7 @@ npx wrangler secret put CLOUDFLARE_API_TOKEN
 npx wrangler deploy
 ```
 
-`npx wrangler deploy` **rebuilds the container image**. After sidecar/Dockerfile/plugin changes do **not** use `--containers-rollout=none` (Worker-only). Routines scheduling, webhooks, and the `/routines` page ship in the Worker. The routines skill, the localhost tool proxy, and the recurring-task system note ship in the container image, so a routines deploy needs the image rebuild. Attachments, `web_search` / `web_fetch`, question cards, and artifact downloads also live in the sidecar, so this slice needs the same image rebuild. Set `PI_BOX_PUBLIC_URL` to the Worker origin so the cloud computer can call Mesh. `CLOUDFLARE_API_TOKEN` is never committed. Optional: `CLOUDFLARE_ACCOUNT_ID` (Browser Rendering search fallback; defaults to the pi-box account used in docs).
+`npx wrangler deploy` **rebuilds the container image**. After sidecar/Dockerfile/plugin changes do **not** use `--containers-rollout=none` (Worker-only). Bot metadata, chat lists, and transcripts ship in the Worker (Mesh DO). Memory tools, `save_skill`, per-bot `AGENTS.md`, and the wider snapshot (agents, skills, named workspaces) ship in the container image, so this slice needs an image rebuild. Routines scheduling, webhooks, and the `/routines` page ship in the Worker. The routines skill, the localhost tool proxy, and the recurring-task system note ship in the container image, so a routines deploy needs the image rebuild. Attachments, `web_search` / `web_fetch`, question cards, and artifact downloads also live in the sidecar, so this slice needs the same image rebuild. Set `PI_BOX_PUBLIC_URL` to the Worker origin so the cloud computer can call Mesh. `CLOUDFLARE_API_TOKEN` is never committed. Optional: `CLOUDFLARE_ACCOUNT_ID` (Browser Rendering search fallback; defaults to the pi-box account used in docs).
 
 ## License
 

@@ -9,6 +9,7 @@ import { handleVaultHttp, VAULT_ROUTES, vaultPublicStatus } from "./vault.mjs";
 import { handleBrowserHttp, browserPublicStatus } from "./browser.mjs";
 import { handlePluginsHttp } from "./plugins.mjs";
 import { handleSnapshotHttp } from "./snapshot.mjs";
+import { handleMemoryHttp } from "./memory.mjs";
 import { handleGoogleOAuthHttp } from "./google-oauth.mjs";
 import { handleApprovalsHttp } from "./approvals.mjs";
 import { handleAttachmentHttp } from "./attachments.mjs";
@@ -104,6 +105,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (await handleSnapshotHttp(req, res, url)) return;
+  if (await handleMemoryHttp(req, res, url)) return;
   if (await handleGoogleOAuthHttp(req, res, url)) return;
   if (await handleApprovalsHttp(req, res, url)) return;
   if (await handleCardsHttp(req, res, url)) return;
@@ -169,6 +171,10 @@ const server = http.createServer(async (req, res) => {
     }
     const message = parsed.message;
     const sessionId = sessionHint || parsed.session || randomUUID();
+    const bot =
+      parsed.bot && typeof parsed.bot === "object"
+        ? { ...parsed.bot, id: parsed.bot.id || parsed.botId || "default" }
+        : { id: parsed.botId || "default" };
 
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
@@ -187,6 +193,7 @@ const server = http.createServer(async (req, res) => {
         message,
         attachments: parsed.attachments,
         emit: (event, data) => sseWrite(res, event, data),
+        bot,
       });
     } catch (err) {
       console.error("[pi-box] chat failed", err);

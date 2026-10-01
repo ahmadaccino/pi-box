@@ -32,12 +32,17 @@
             <strong>pi-box</strong>
           </div>
           <div class="aside-actions">
-            <button type="button" id="newchat" class="ghost" title="New chat">New</button>
+            <button type="button" id="newbot" class="ghost" title="New bot">Bot</button>
             <button type="button" id="userbtn" class="ghost" title="Account">you</button>
           </div>
         </div>
-        <p class="aside-label">chats</p>
+        <p class="aside-label">bots</p>
         <nav id="roster"></nav>
+        <div class="chats-head">
+          <p class="aside-label">chats</p>
+          <button type="button" id="newchat" class="ghost" title="New chat">New</button>
+        </div>
+        <nav id="chats"></nav>
         <div id="skill-list" class="skill-list"></div>
         <p class="aside-label">machines</p>
         <div id="machines"></div>
@@ -51,11 +56,13 @@
       <section class="thread">
         <header>
           <div>
-            <strong id="box-name">select a chat</strong>
+            <button type="button" id="show-bots" class="ghost">Bots</button>
+            <strong id="box-name">select a bot</strong>
             <span class="sub" id="box-meta"></span>
             <span class="sub" id="box-runtime"></span>
           </div>
           <div class="status" id="status">idle</div>
+          <button type="button" id="bot-settings" class="ghost">Settings</button>
           <a class="sub" href="/routines">routines</a>
         </header>
         <div id="computer-pane" hidden></div>
@@ -71,6 +78,37 @@
           </div>
         </form>
       </section>
+    </div>
+    <div id="bot-sheet" class="sheet" hidden>
+      <form id="bot-form" class="sheet-card">
+        <div class="sheet-head">
+          <h2 id="bot-sheet-title">Bot</h2>
+          <button type="button" id="bot-sheet-close" class="ghost">Close</button>
+        </div>
+        <label class="field">
+          <span>Name</span>
+          <input id="bot-name" name="name" maxlength="80" required />
+        </label>
+        <label class="field">
+          <span>Description</span>
+          <input id="bot-description" name="description" maxlength="500" />
+        </label>
+        <div class="field">
+          <span>Avatar</span>
+          <div id="bot-colors" class="swatches"></div>
+        </div>
+        <label class="field">
+          <span>Instructions</span>
+          <textarea id="bot-instructions" name="instructions" rows="8" placeholder="Standing rules for this bot"></textarea>
+        </label>
+        <div class="sheet-actions">
+          <button type="submit" id="bot-save">Save</button>
+          <button type="button" id="bot-delete" class="ghost">Delete</button>
+        </div>
+        <h3>Memory</h3>
+        <p class="lede">Profile facts stay in the prompt. Log facts are dated and searchable.</p>
+        <div id="bot-memory"></div>
+      </form>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>

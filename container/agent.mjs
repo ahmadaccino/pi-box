@@ -11,6 +11,9 @@ import { bashSpawnHook } from "./shell-env.mjs";
 import { attachToolGate, getApprovalGate } from "./approvals.mjs";
 import { prepareAttachments } from "./attachments.mjs";
 import { buildCustomTools } from "./pi-tools.mjs";
+import { ensureBotLayout, safeBotId } from "./bot-files.mjs";
+import { promptWithProfile, readMemory } from "./memory.mjs";
+import { botCustomTools } from "./bot-tools.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -66,8 +69,19 @@ export function seedAgentDir(agentDir, env = process.env) {
   fs.writeFileSync(notePath, existing.endsWith("\n") ? existing : `${existing}\n`);
 }
 
-async function diskSessionManager(mod, sessionId, cwd, agentDir) {
-  const sessionDir = path.join(agentDir, "sessions");
+function normalizeBot(bot) {
+  const id = safeBotId(bot?.id);
+  return {
+    id,
+    name: bot?.name || (id === "default" ? "Assistant" : id),
+    description: bot?.description || "",
+    instructions: bot?.instructions || "",
+    avatarColor: bot?.avatarColor || "",
+    updatedAt: bot?.updatedAt || 0,
+  };
+}
+
+async function diskSessionManager(mod, sessionId, cwd, sessionDir) {
   fs.mkdirSync(sessionDir, { recursive: true });
   if (typeof mod.SessionManager?.create !== "function") {
     return mod.SessionManager.inMemory(cwd);
@@ -130,18 +144,30 @@ export function createAgentRuntime(opts = {}) {
     }
   }
 
-  async function getSession(id) {
-    if (sessions.has(id)) return sessions.get(id);
+  async function getSession(id, bot) {
+    const profile = normalizeBot(bot);
+    const root = agentDirOf();
+    const stamp = `${profile.id}\0${profile.name}\0${profile.description}\0${profile.instructions}\0${profile.updatedAt}`;
+    const cached = sessions.get(id);
+    if (cached && cached.stamp === stamp) return cached;
+    if (cached?.kind === "pi" && typeof cached.session?.dispose === "function") {
+      try {
+        await cached.session.dispose();
+      } catch {
+        /* replaced by a session with newer bot instructions */
+      }
+    }
     const mod = await loadPi();
     if (!mod || !hasProviderKey(envOf())) {
-      const mock = { kind: "mock", id };
+      const mock = { kind: "mock", id, stamp };
       sessions.set(id, mock);
       return mock;
     }
     await refreshCatalog();
-    const agentDir = agentDirOf();
-    const cwd = cwdOf();
-    seedAgentDir(agentDir, envOf());
+    seedAgentDir(ensureBotLayout(root, profile).agentDir, envOf());
+    const layout = ensureBotLayout(root, profile);
+    const agentDir = layout.agentDir;
+    const cwd = layout.workspace;
     const modelRuntime = await mod.ModelRuntime.create({
       authPath: path.join(agentDir, "auth.json"),
       modelsPath: path.join(agentDir, "models.json"),
@@ -187,11 +213,16 @@ export function createAgentRuntime(opts = {}) {
       console.warn("[pi-box] custom tools skipped", err?.message || err);
       extraTools = [];
     }
-    const customTools = [...(bashTool ? [bashTool] : []), ...extraTools];
+    const botTools = await botCustomTools(mod, {
+      memoryFile: layout.memoryFile,
+      agentDir: root,
+      onSkillSaved: () => refreshCatalog(),
+    });
+    const customTools = [bashTool, ...extraTools, ...botTools].filter(Boolean);
     const { session } = await mod.createAgentSession({
       cwd,
       agentDir,
-      sessionManager: await diskSessionManager(mod, id, cwd, agentDir),
+      sessionManager: await diskSessionManager(mod, id, cwd, layout.sessionsDir),
       modelRuntime,
       resourceLoader: loader,
       model: resolved.model,
@@ -205,11 +236,15 @@ export function createAgentRuntime(opts = {}) {
         "grep",
         "find",
         ...extraTools.map((tool) => tool.name),
+        "memory_write",
+        "memory_forget",
+        "memory_search",
+        "save_skill",
       ],
       ...(customTools.length ? { customTools } : {}),
     });
-    attachToolGate(session, opts.gate || getApprovalGate());
-    const wrapped = { kind: "pi", id, session, running: false, aborted: false, bridge };
+    attachToolGate(session, opts.gate || getApprovalGate(), { rulesFile: layout.approvalsFile });
+    const wrapped = { kind: "pi", id, stamp, session, running: false, aborted: false, bridge };
     sessions.set(id, wrapped);
     return wrapped;
   }
@@ -294,28 +329,41 @@ export function createAgentRuntime(opts = {}) {
     emit("done", { mock: false });
   }
 
-  async function composeTurn({ sessionId, message, attachments }) {
+  async function composeTurn({ sessionId, message, attachments, cwd, agentDir }) {
     const prepared = await prepareAttachments({
       attachments,
-      cwd: cwdOf(),
-      agentDir: agentDirOf(),
+      cwd: cwd || cwdOf(),
+      agentDir: agentDir || agentDirOf(),
       sessionId,
     });
     const text = [String(message || "").trim(), prepared.note].filter(Boolean).join("\n\n");
     return { message: text, images: prepared.images };
   }
 
-  async function runTurn({ sessionId, message, emit, attachments }) {
+  async function runTurn({ sessionId, message, emit, attachments, bot }) {
     if (!capabilities) await refreshCatalog();
-    const wrapped = await getSession(String(sessionId));
-    const composed = await composeTurn({ sessionId, message, attachments });
+    const profile = normalizeBot(bot);
+    const layout = ensureBotLayout(agentDirOf(), profile);
+    process.env.PI_BOX_BOT_ID = layout.id;
+    const wrapped = await getSession(String(sessionId), profile);
+    const composed = await composeTurn({
+      sessionId,
+      message,
+      attachments,
+      cwd: layout.workspace,
+      agentDir: agentDirOf(),
+    });
+    const prompt =
+      wrapped.kind === "mock"
+        ? composed.message
+        : promptWithProfile(composed.message, readMemory(layout.memoryFile));
     wrapped.running = true;
     wrapped.aborted = false;
     wrapped.emit = emit;
     if (wrapped.bridge) wrapped.bridge.emit = emit;
     try {
-      if (wrapped.kind === "mock") await runMock(wrapped, emit, composed.message);
-      else await runPi(wrapped, emit, composed.message, composed.images);
+      if (wrapped.kind === "mock") await runMock(wrapped, emit, prompt);
+      else await runPi(wrapped, emit, prompt, composed.images);
     } finally {
       wrapped.running = false;
       wrapped.emit = null;

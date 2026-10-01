@@ -5,7 +5,8 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const ROOTS = ["vault", "sessions", "uploads"];
+const ROOTS = ["vault", "sessions", "uploads", "agents", "skills", "workspaces"];
+const ROOT_FILES = new Set(["memory.json", "approvals.json", "AGENTS.md"]);
 export const SNAPSHOT_DO = { maxFile: 2 * 1024 * 1024, maxFiles: 80 };
 export const SNAPSHOT_R2 = { maxFile: 32 * 1024 * 1024, maxFiles: 500 };
 const MAX_FILE = SNAPSHOT_DO.maxFile;
@@ -15,7 +16,9 @@ function isSafeRel(rel) {
   if (!rel || rel.includes("\0")) return false;
   const norm = rel.replace(/\\/g, "/");
   if (norm.startsWith("/") || norm.includes("..")) return false;
-  const top = norm.split("/")[0];
+  const parts = norm.split("/");
+  const top = parts[0];
+  if (parts.length === 1 && ROOT_FILES.has(top)) return true;
   return ROOTS.includes(top);
 }
 
@@ -40,14 +43,44 @@ async function walk(dir, prefix, acc, maxFiles) {
   return acc;
 }
 
-export async function collectSnapshot(agentDir, limits = SNAPSHOT_DO) {
+async function readTree(root, top, maxFiles, maxFile, files) {
+  const found = await walk(path.join(root, top), top, [], maxFiles);
+  for (const { rel, full } of found) {
+    if (Object.keys(files).length >= maxFiles) break;
+    if (!isSafeRel(rel)) continue;
+    try {
+      const buf = await readFile(full);
+      if (buf.length > maxFile) continue;
+      files[rel] = buf.toString("utf8");
+    } catch {
+      /* skip unreadable */
+    }
+  }
+}
+
+export async function collectSnapshot(agentDir, limits = SNAPSHOT_DO, opts = {}) {
   const maxFile = limits.maxFile ?? SNAPSHOT_DO.maxFile;
   const maxFiles = limits.maxFiles ?? SNAPSHOT_DO.maxFiles;
   const root = path.resolve(agentDir);
   const files = {};
-  for (const top of ROOTS) {
-    const found = await walk(path.join(root, top), top, [], maxFiles);
+  const tops = opts.workspacesDir ? ROOTS.filter((top) => top !== "workspaces") : ROOTS;
+  for (const top of tops) {
+    await readTree(root, top, maxFiles, maxFile, files);
+  }
+  for (const name of ROOT_FILES) {
+    if (Object.keys(files).length >= maxFiles) break;
+    try {
+      const buf = await readFile(path.join(root, name));
+      if (buf.length > maxFile) continue;
+      files[name] = buf.toString("utf8");
+    } catch {
+      /* optional root file */
+    }
+  }
+  if (opts.workspacesDir) {
+    const found = await walk(opts.workspacesDir, "workspaces", [], maxFiles);
     for (const { rel, full } of found) {
+      if (Object.keys(files).length >= maxFiles) break;
       if (!isSafeRel(rel)) continue;
       try {
         const buf = await readFile(full);
@@ -61,7 +94,19 @@ export async function collectSnapshot(agentDir, limits = SNAPSHOT_DO) {
   return { version: 1, files };
 }
 
-export async function restoreSnapshot(agentDir, payload, limits = SNAPSHOT_DO) {
+function snapshotDest(agentDir, rel, opts) {
+  if (opts.workspacesDir && rel.startsWith("workspaces/")) {
+    return path.join(opts.workspacesDir, rel.slice("workspaces/".length));
+  }
+  return path.join(agentDir, rel);
+}
+
+export function workspaceSnapshotDir(env = process.env) {
+  if (!env.PI_CWD) return null;
+  return path.join(env.PI_CWD, "bots");
+}
+
+export async function restoreSnapshot(agentDir, payload, limits = SNAPSHOT_DO, opts = {}) {
   const maxFile = limits.maxFile ?? SNAPSHOT_DO.maxFile;
   const root = path.resolve(agentDir);
   const files = payload?.files && typeof payload.files === "object" ? payload.files : {};
@@ -70,7 +115,7 @@ export async function restoreSnapshot(agentDir, payload, limits = SNAPSHOT_DO) {
     if (!isSafeRel(rel)) continue;
     if (typeof content !== "string") continue;
     if (content.length > maxFile) continue;
-    const dest = path.join(root, rel);
+    const dest = snapshotDest(root, rel, opts);
     await mkdir(path.dirname(dest), { recursive: true, mode: 0o700 });
     await writeFile(dest, content, { mode: 0o600 });
     written += 1;
@@ -125,8 +170,9 @@ export async function handleSnapshotHttp(req, res, url) {
     url.searchParams.get("wide") === "1" ||
     req.headers["x-pi-box-snapshot"] === "r2";
   const limits = wide ? SNAPSHOT_R2 : SNAPSHOT_DO;
+  const snapOpts = { workspacesDir: workspaceSnapshotDir() };
   if (method === "GET") {
-    const snap = await collectSnapshot(agentDir, limits);
+    const snap = await collectSnapshot(agentDir, limits, snapOpts);
     json(res, 200, snap);
     return true;
   }
@@ -145,7 +191,7 @@ export async function handleSnapshotHttp(req, res, url) {
       json(res, 400, { error: "invalid json" });
       return true;
     }
-    const out = await restoreSnapshot(agentDir, payload, limits);
+    const out = await restoreSnapshot(agentDir, payload, limits, snapOpts);
     json(res, 200, out);
     return true;
   }

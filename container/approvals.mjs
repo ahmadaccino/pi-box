@@ -60,12 +60,16 @@ export function createApprovalGate(opts = {}) {
     return rules.find((rule) => rule?.effect === "allow" && rule.tool === tool && rule.target === target);
   }
 
-  async function persistAlways(tool, target) {
-    const file = rulesFile();
+  async function persistAlways(tool, target, file) {
     const rules = await readRules(file);
     if (findRule(rules, tool, target)) return;
     rules.push({ tool, target, effect: "allow" });
     await writeRules(file, rules);
+  }
+
+  function rulesPath(action) {
+    if (typeof action?.rulesFile === "string" && action.rulesFile) return action.rulesFile;
+    return rulesFile();
   }
 
   function settle(entry, decision, via) {
@@ -86,7 +90,8 @@ export function createApprovalGate(opts = {}) {
     const tool = String(action?.tool || "");
     const target = String(action?.target || "");
     const summary = String(action?.summary || `${tool} ${target}`);
-    const rules = await readRules(rulesFile());
+    const file = rulesPath(action);
+    const rules = await readRules(file);
     if (findRule(rules, tool, target)) {
       return { decision: "allow", via: "rule", id: null };
     }
@@ -101,7 +106,7 @@ export function createApprovalGate(opts = {}) {
     emit("approval", approval);
     emit("card", approvalCardEvent(approval));
     return new Promise((resolve) => {
-      const entry = { id, tool, target, resolve, done: false, timer: null, unsub: null };
+      const entry = { id, tool, target, file, resolve, done: false, timer: null, unsub: null };
       pending.set(id, entry);
       if (!isConnected()) arm(entry);
       else {
@@ -116,7 +121,7 @@ export function createApprovalGate(opts = {}) {
     if (!DECISIONS.has(decision)) return { ok: false, error: "bad decision" };
     const entry = pending.get(String(id));
     if (!entry) return { ok: false, error: "unknown" };
-    if (decision === "always") await persistAlways(entry.tool, entry.target);
+    if (decision === "always") await persistAlways(entry.tool, entry.target, entry.file || rulesFile());
     const allowed = decision === "allow_once" || decision === "always";
     settle(entry, allowed ? "allow" : "deny", "user");
     return { ok: true, decision };
@@ -141,7 +146,7 @@ export function resetApprovalGateForTests() {
   singleton = null;
 }
 
-export function attachToolGate(session, gate = getApprovalGate()) {
+export function attachToolGate(session, gate = getApprovalGate(), opts = {}) {
   const agent = session?.agent;
   if (!agent) return false;
   const previous =
@@ -154,7 +159,10 @@ export function attachToolGate(session, gate = getApprovalGate()) {
       return { block: true, reason: review.reason };
     }
     if (review.action === "approval") {
-      const decision = await gate.decide(review.approval);
+      const decision = await gate.decide({
+        ...review.approval,
+        ...(opts.rulesFile ? { rulesFile: opts.rulesFile } : {}),
+      });
       if (decision.decision !== "allow") {
         return {
           block: true,

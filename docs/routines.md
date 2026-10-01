@@ -4,7 +4,7 @@ Saved prompts with a trigger. They run while you are away. The Mesh Durable Obje
 
 ## Model
 
-Each routine has a name, prompt, enabled flag, trigger, timezone, created time, last run, and a short run history (status `running`, `succeeded`, `failed`, or `waiting`, plus the result text).
+Each routine has a name, prompt, enabled flag, trigger, timezone, created time, last run, a `botId` (the bot it belongs to; omitted on older rows means `default`), and a short run history (status `running`, `succeeded`, `failed`, or `waiting`, plus the result text). `GET /api/routines?botId=` filters the list. A run uses that bot's instructions, memory, and approval rules.
 
 Triggers:
 

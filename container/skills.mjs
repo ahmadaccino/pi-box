@@ -52,6 +52,14 @@ export function parseSkill(text, filePath) {
   };
 }
 
+function markUserSkill(skill) {
+  const root = process.env.PI_CODING_AGENT_DIR;
+  if (!root || !skill?.filePath) return skill;
+  const userRoot = path.resolve(root, "skills") + path.sep;
+  if (path.resolve(skill.filePath).startsWith(userRoot)) skill.source = "user";
+  return skill;
+}
+
 async function walkSkillDirs(dir, acc) {
   let entries;
   try {
@@ -67,7 +75,7 @@ async function walkSkillDirs(dir, acc) {
     } else if (entry.isFile() && entry.name === "SKILL.md") {
       try {
         const text = await readFile(full, "utf8");
-        const skill = parseSkill(text, full);
+        const skill = markUserSkill(parseSkill(text, full));
         if (skill) acc.push(skill);
       } catch {
         /* skip unreadable */
@@ -94,10 +102,10 @@ async function pluginSkillDirs(pluginsRoot) {
 
 export function skillRoots() {
   const roots = [
-    path.join(here, "skills"),
     process.env.PI_CODING_AGENT_DIR
       ? path.join(process.env.PI_CODING_AGENT_DIR, "skills")
       : null,
+    path.join(here, "skills"),
     process.env.PI_PLUGINS_DIR || path.join(here, "..", "plugins"),
   ].filter(Boolean);
   return roots;
@@ -159,5 +167,6 @@ export function publicSkill(skill) {
     missing: skill.missing,
     compatibility: skill.compatibility,
     license: skill.license,
+    source: skill.source || "pi-box",
   };
 }

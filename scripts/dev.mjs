@@ -4,7 +4,7 @@
  */
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -32,6 +32,17 @@ import {
 } from "../src/routines.ts";
 import { attachmentMeta, parseChatBody } from "../container/chat-body.mjs";
 import { listSubscriptions, removeSubscription, upsertSubscription } from "../src/push.ts";
+import {
+  BotBook,
+  exportBotBook,
+  handleBotsRequest,
+  importBotBook,
+  isBotsApiPath,
+  normalizeBotId,
+  publicBot,
+  recordAssistantMessage,
+  recordUserMessage,
+} from "../src/bots.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicDir = path.join(root, "public");
@@ -50,9 +61,24 @@ try {
 
 const mesh = new MeshStore();
 const routines = new RoutineBook();
+const botIndexPath = path.join(root, ".pi-agent", "bot-index.json");
+let bots = new BotBook();
+try {
+  bots = importBotBook(JSON.parse(await readFile(botIndexPath, "utf8")));
+} catch {
+  bots = new BotBook();
+}
+
+async function saveBots() {
+  if (!bots.dirty) return;
+  await mkdir(path.dirname(botIndexPath), { recursive: true });
+  await writeFile(botIndexPath, JSON.stringify(exportBotBook(bots)));
+  bots.dirty = false;
+}
 const snapshots = new Map();
 const pending = new Map();
 let pushSubs = [];
+const liveTranscript = new Map();
 const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -218,10 +244,18 @@ const server = http.createServer(async (req, res) => {
       onDeviceEvent: (jobId, event, data) => {
         if (event === "text" && data && typeof data === "object" && data.delta) {
           appendRoutineTranscript(routines, jobId, String(data.delta));
+          liveTranscript.set(jobId, (liveTranscript.get(jobId) || "") + String(data.delta));
         }
         writePending(jobId, event, data);
       },
       onDeviceAck: async (jobId, deviceId) => {
+        const text = liveTranscript.get(jobId) || "";
+        liveTranscript.delete(jobId);
+        const job = mesh.getJob(jobId);
+        if (job && text.trim()) {
+          recordAssistantMessage(bots, { sessionId: job.sessionId, text, now: Date.now() });
+          await saveBots();
+        }
         finishRoutineRun(routines, mesh, jobId, { status: "succeeded", now: Date.now() });
         writePending(jobId, "status", { state: "pi", runtime: deviceId });
         writePending(jobId, "done", { mock: false, runtime: deviceId });
@@ -322,6 +356,33 @@ const server = http.createServer(async (req, res) => {
     const sessionId = sanitizeSession(
       url.searchParams.get("session") || req.headers["x-pi-box-session"] || parsed.session,
     );
+    const requestedBot = normalizeBotId(parsed.botId || parsed.bot?.id);
+    const bot = bots.get(requestedBot) || bots.ensureDefault(Date.now());
+    if (String(parsed.message || "").trim()) {
+      recordUserMessage(bots, {
+        botId: bot.id,
+        sessionId,
+        text: String(parsed.message || ""),
+        now: Date.now(),
+      });
+      await saveBots();
+    }
+    const profile = publicBot(bot);
+    const enriched = JSON.stringify({
+      message: parsed.message,
+      session: sessionId,
+      require: parsed.require,
+      botId: bot.id,
+      bot: profile,
+      attachments: (parsed.attachments || []).map((file) => ({
+        id: file.id,
+        name: file.name,
+        mime: file.mime,
+        rel: file.rel,
+        r2Key: file.r2Key,
+        data: file.bytes ? Buffer.from(file.bytes).toString("base64") : "",
+      })),
+    });
     routines.rememberSession(sessionId);
     mesh.sweep(Date.now());
     const planned = planChatTurn(mesh, {
@@ -333,6 +394,8 @@ const server = http.createServer(async (req, res) => {
         message: parsed.message,
         sessionId,
         attachments: attachmentMeta(parsed.attachments),
+        botId: bot.id,
+        bot: profile,
       },
     });
     const { job, decision } = planned;
@@ -369,22 +432,32 @@ const server = http.createServer(async (req, res) => {
       const target = `http://127.0.0.1:${AGENT_PORT}${url.pathname}${url.search}`;
       const headers = new Headers(req.headers);
       headers.delete("host");
-      if (!headers.get("content-type")) headers.set("content-type", "application/json");
-      const upstream = await fetch(target, { method: "POST", headers, body: rawBuf });
+      headers.set("content-type", "application/json");
+      headers.delete("content-length");
+      const upstream = await fetch(target, { method: "POST", headers, body: enriched });
       res.writeHead(upstream.status, {
         ...Object.fromEntries(upstream.headers),
         "x-pi-box-runtime": "cloud",
       });
+      const decoder = new TextDecoder();
+      let sseBody = "";
       if (upstream.body) {
         const reader = upstream.body.getReader();
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          if (value) sseBody += decoder.decode(value, { stream: true });
           res.write(value);
         }
       }
+      sseBody += decoder.decode();
       res.end();
       mesh.ack({ jobId: job.id, deviceId: "cloud", now: Date.now() });
+      const assistant = assistantTextFromSse(sseBody);
+      if (assistant.trim()) {
+        recordAssistantMessage(bots, { sessionId, text: assistant, now: Date.now() });
+        await saveBots();
+      }
     } catch (err) {
       mesh.fail(job.id, "cloud");
       sendJson(res, 502, { error: "agent not ready", detail: err?.message });
@@ -419,6 +492,29 @@ const server = http.createServer(async (req, res) => {
       onClaim: (run) => claimed.push(run),
     });
     for (const run of claimed) void dispatchRoutine(run);
+    const outHeaders = Object.fromEntries(upstream.headers);
+    res.writeHead(upstream.status, outHeaders);
+    res.end(Buffer.from(await upstream.arrayBuffer()));
+    return;
+  }
+
+  if (isBotsApiPath(url.pathname)) {
+    const chunks = [];
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      for await (const c of req) chunks.push(c);
+    }
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (v) headers.set(k, Array.isArray(v) ? v.join(", ") : v);
+    }
+    if (!headers.get("x-pi-box-actor")) headers.set("x-pi-box-actor", "user");
+    const request = new Request(`http://127.0.0.1:${UI_PORT}${url.pathname}${url.search}`, {
+      method: req.method,
+      headers,
+      body: chunks.length ? Buffer.concat(chunks) : undefined,
+    });
+    const upstream = await handleBotsRequest({ book: bots, request, now: Date.now() });
+    await saveBots();
     const outHeaders = Object.fromEntries(upstream.headers);
     res.writeHead(upstream.status, outHeaders);
     res.end(Buffer.from(await upstream.arrayBuffer()));
@@ -502,7 +598,14 @@ async function dispatchRoutine(claimed) {
         "x-pi-box-mesh": "default",
         "x-pi-box-origin": `http://127.0.0.1:${UI_PORT}`,
       },
-      body: JSON.stringify({ message: claimed.prompt, session: claimed.sessionId }),
+      body: JSON.stringify({
+        message: claimed.prompt,
+        session: claimed.sessionId,
+        botId: claimed.botId || "default",
+        bot: bots.get(claimed.botId || "default")
+          ? publicBot(bots.get(claimed.botId || "default"))
+          : { id: claimed.botId || "default" },
+      }),
     });
     const text = await upstream.text();
     const assistant = assistantTextFromSse(text);

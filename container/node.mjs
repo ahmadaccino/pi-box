@@ -19,8 +19,6 @@ import { detectCapabilities } from "./host.mjs";
 import {
   HEARTBEAT_MS,
   POLL_MS,
-  agentHome,
-  agentWorkspace,
   applyJobEnv,
   deviceAuthHeaders,
   identityPaths,
@@ -30,7 +28,7 @@ import {
   unsatisfiedCaps,
   userAuthHeaders,
 } from "./node-logic.mjs";
-import { collectSnapshot, restoreSnapshot, SNAPSHOT_R2 } from "./snapshot.mjs";
+import { collectSnapshot, restoreSnapshot, SNAPSHOT_R2, workspaceSnapshotDir } from "./snapshot.mjs";
 import { sealVaultKeyFromEnv } from "./vault.mjs";
 
 export async function loginWithPassword(origin, password) {
@@ -155,11 +153,13 @@ export async function handleDeviceJob(job, ctx) {
     await nack(job.id, missing);
     return { nacked: missing };
   }
-  const agentId = job.agentId || job.sessionId || "default";
-  const agentDir = agentHome(home, agentId);
-  const cwd = agentWorkspace(home, agentId);
-  await mkdir(agentDir, { recursive: true, mode: 0o700 });
-  await mkdir(cwd, { recursive: true, mode: 0o700 });
+  const payload = job.payload && typeof job.payload === "object" ? job.payload : {};
+  const bot =
+    payload.bot && typeof payload.bot === "object"
+      ? payload.bot
+      : { id: payload.botId || job.botId || "default" };
+  const stateRoot = home;
+  await mkdir(stateRoot, { recursive: true, mode: 0o700 });
   const jobEnv = applyJobEnv(job, caps, process.env);
   for (const [k, v] of Object.entries(jobEnv)) {
     if (v == null) continue;
@@ -167,18 +167,17 @@ export async function handleDeviceJob(job, ctx) {
   }
   sealVaultKeyFromEnv();
   sealInternalTokenFromEnv();
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  process.env.PI_CWD = cwd;
+  process.env.PI_CODING_AGENT_DIR = stateRoot;
+  const snapOpts = { workspacesDir: workspaceSnapshotDir() };
   try {
     const snap = await pullSnapshot(origin, { sessionId: job.sessionId, deviceId, deviceSecret });
-    if (snap?.files) await restoreSnapshot(agentDir, snap, SNAPSHOT_R2);
+    if (snap?.files) await restoreSnapshot(stateRoot, snap, SNAPSHOT_R2, snapOpts);
   } catch (err) {
     await nack(job.id, ["snapshot"]);
     console.warn("[pi-box] snapshot restore failed", err?.message || err);
     return { failed: "snapshot" };
   }
-  const runtime = createAgentRuntime({ cwd, agentDir, env: process.env });
-  const payload = job.payload && typeof job.payload === "object" ? job.payload : {};
+  const runtime = createAgentRuntime({ agentDir: stateRoot, env: process.env });
   const message = String(payload.message || "").trim();
   if (!message) {
     await nack(job.id, ["message"]);
@@ -190,8 +189,9 @@ export async function handleDeviceJob(job, ctx) {
       message,
       attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
       emit: (event, data) => sendEvent(job.id, event, data),
+      bot,
     });
-    const collected = await collectSnapshot(agentDir, SNAPSHOT_R2);
+    const collected = await collectSnapshot(stateRoot, SNAPSHOT_R2, snapOpts);
     await pushSnapshot(origin, {
       sessionId: job.sessionId,
       deviceId,

@@ -242,11 +242,23 @@ export function parseChatBody(input, contentType, opts = {}) {
   let session = String(opts.sessionId || "");
   let require = [];
   let files = [];
+  let botId = "";
+  let bot = null;
   if (/multipart\/form-data/i.test(type)) {
     const parsed = parseMultipart(bytes, type);
     if (!parsed.ok) return parsed;
     message = fieldValue(parsed.fields, "message").trim();
     session = session || fieldValue(parsed.fields, "session").trim();
+    botId = fieldValue(parsed.fields, "botId").trim();
+    const botRaw = fieldValue(parsed.fields, "bot").trim();
+    if (botRaw) {
+      try {
+        const parsedBot = JSON.parse(botRaw);
+        if (parsedBot && typeof parsedBot === "object" && !Array.isArray(parsedBot)) bot = parsedBot;
+      } catch {
+        bot = null;
+      }
+    }
     const rawRequire = fieldValue(parsed.fields, "require");
     if (rawRequire) {
       try {
@@ -270,6 +282,8 @@ export function parseChatBody(input, contentType, opts = {}) {
     }
     message = String(body.message || "").trim();
     session = session || String(body.session || "").trim();
+    botId = String(body.botId || "");
+    if (body.bot && typeof body.bot === "object" && !Array.isArray(body.bot)) bot = body.bot;
     if (Array.isArray(body.require)) require = body.require.map((item) => String(item));
     const attachments = Array.isArray(body.attachments) ? body.attachments : [];
     for (const item of attachments) {
@@ -294,7 +308,7 @@ export function parseChatBody(input, contentType, opts = {}) {
   if (!checked.ok) return { ok: false, status: 413, error: checked.error };
   if (!message && files.length) message = "See the attached files.";
   if (!message) return { ok: false, status: 400, error: "message required" };
-  return { ok: true, message, session, require, attachments: files };
+  return { ok: true, message, session, require, attachments: files, botId, bot };
 }
 
 export function bindAttachments(files, sessionId) {

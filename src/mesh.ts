@@ -19,6 +19,17 @@ import {
 import { handleMeshRequest, mintDeviceSecret } from "./mesh-http.ts";
 import { MeshStore, type MeshRecords } from "./mesh-state.ts";
 import { sanitizeSession } from "./password.ts";
+import {
+  BotBook,
+  exportBotBook,
+  handleBotsRequest,
+  importBotBook,
+  isBotsApiPath,
+  normalizeBotId,
+  publicBot,
+  recordAssistantMessage,
+  recordUserMessage,
+} from "./bots.ts";
 import type { Job } from "./place.ts";
 import { getSnapshotBlob, putSnapshotBlob, snapshotKey } from "./snapshot-r2.ts";
 import {
@@ -70,6 +81,8 @@ type RoutineSql = {
 export class Mesh extends DurableObject<MeshEnv> {
   pending = new Map<string, Pending>();
   routineBook = new RoutineBook();
+  botBook = new BotBook();
+  liveTranscript = new Map<string, string>();
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -85,6 +98,9 @@ export class Mesh extends DurableObject<MeshEnv> {
     }
     if (path === "/api/push/subscriptions" && (request.method === "POST" || request.method === "DELETE")) {
       return this.handlePushSubscription(request);
+    }
+    if (isBotsApiPath(path)) {
+      return this.handleBots(request);
     }
     if (path === "/api/chat" && request.method === "POST") {
       return this.handleChat(request);
@@ -114,6 +130,7 @@ export class Mesh extends DurableObject<MeshEnv> {
           return this.writePending(jobId, event, data);
         },
         onDeviceAck: async (jobId, deviceId) => {
+          this.finishLiveTranscript(store, jobId);
           const notice = finishRoutineRun(this.routineBook, store, jobId, {
             status: "succeeded",
             now: Date.now(),
@@ -153,6 +170,7 @@ export class Mesh extends DurableObject<MeshEnv> {
                 jobId: job.id,
                 decision: next.decision,
                 job: next.job,
+                botId: routine.botId || "default",
               });
             }
             return;
@@ -226,6 +244,7 @@ export class Mesh extends DurableObject<MeshEnv> {
     }
     if (parsed.type === "ack" && parsed.jobId) {
       await this.withStore((store) => {
+        this.finishLiveTranscript(store, parsed.jobId as string);
         store.ack({ jobId: parsed.jobId as string, deviceId, now: Date.now() });
         const notice = finishRoutineRun(this.routineBook, store, parsed.jobId as string, {
           status: "succeeded",
@@ -310,22 +329,32 @@ export class Mesh extends DurableObject<MeshEnv> {
         file.r2Key = "";
       }
     }
-    const forwardBody = JSON.stringify({
-      message: parsed.message,
-      session: sessionId,
-      require: parsed.require,
-      attachments: attachments.map((file) => ({
-        id: file.id,
-        name: file.name,
-        mime: file.mime,
-        rel: file.rel,
-        r2Key: file.r2Key,
-        data: file.bytes ? bytesToBase64(file.bytes) : "",
-      })),
-    });
+    const requestedBot = normalizeBotId(parsed.botId || parsed.bot?.id);
+    let forwardBody = "";
     const planned = await this.withStore((store) => {
       this.routineBook.rememberSession(sessionId);
       this.routineBook.settings.meshId = meshId;
+      const text = String(parsed.message || "");
+      if (text.trim()) {
+        recordUserMessage(this.botBook, { botId: requestedBot, sessionId, text, now: Date.now() });
+      }
+      const bot = this.botBook.get(requestedBot) || this.botBook.ensureDefault(Date.now());
+      const profile = publicBot(bot);
+      forwardBody = JSON.stringify({
+        message: parsed.message,
+        session: sessionId,
+        require: parsed.require,
+        botId: bot.id,
+        bot: profile,
+        attachments: attachments.map((file) => ({
+          id: file.id,
+          name: file.name,
+          mime: file.mime,
+          rel: file.rel,
+          r2Key: file.r2Key,
+          data: file.bytes ? bytesToBase64(file.bytes) : "",
+        })),
+      });
       return planChatTurn(store, {
         sessionId,
         message: parsed.message,
@@ -336,6 +365,8 @@ export class Mesh extends DurableObject<MeshEnv> {
           message: parsed.message,
           sessionId,
           attachments: attachmentMeta(attachments),
+          botId: bot.id,
+          bot: profile,
         },
       });
     });
@@ -444,20 +475,37 @@ export class Mesh extends DurableObject<MeshEnv> {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let sseTail = "";
+    let sseBody = "";
     void (async () => {
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          await writer.write(value);
-          sseTail += decoder.decode(value, { stream: true });
+          const chunk = value ? decoder.decode(value, { stream: true }) : "";
+          if (chunk) {
+            sseBody += chunk;
+            sseTail += chunk;
+          }
+          if (value) await writer.write(value);
           const parts = sseTail.split("\n\n");
           sseTail = parts.pop() || "";
           for (const part of parts) this.noteSse(meshId, part);
         }
-        await this.withStore((store) =>
-          store.ack({ jobId, deviceId: "cloud", now: Date.now() }),
-        );
+        const rest = decoder.decode();
+        sseBody += rest;
+        if (rest) {
+          sseTail += rest;
+          const parts = sseTail.split("\n\n");
+          sseTail = parts.pop() || "";
+          for (const part of parts) this.noteSse(meshId, part);
+        }
+        await this.withStore((store) => {
+          store.ack({ jobId, deviceId: "cloud", now: Date.now() });
+          const assistant = assistantTextFromSse(sseBody);
+          if (assistant.trim()) {
+            recordAssistantMessage(this.botBook, { sessionId, text: assistant, now: Date.now() });
+          }
+        });
         await this.captureFromCloud(meshId, sessionId);
       } catch {
         await this.withStore((store) => store.fail(jobId, "cloud"));
@@ -600,6 +648,7 @@ export class Mesh extends DurableObject<MeshEnv> {
   }
 
   private async writePending(jobId: string, event: string, data: unknown) {
+    this.noteTranscript(jobId, event, data);
     const pending = this.pending.get(jobId);
     if (!pending) return;
     await pending.writer.write(pending.encoder.encode(sseChunk(event, data)));
@@ -707,13 +756,20 @@ export class Mesh extends DurableObject<MeshEnv> {
         "x-pi-box-mesh": meshId,
       };
       if (this.env.GATEWAY_TOKEN) headers["x-pi-box-internal"] = this.env.GATEWAY_TOKEN;
+      const botId = claimed.botId || "default";
+      const bot = this.botBook.get(botId);
       const res = await container.fetch(
         new Request(
           `http://sidecar/api/chat?session=${encodeURIComponent(claimed.sessionId)}`,
           {
             method: "POST",
             headers,
-            body: JSON.stringify({ message: claimed.prompt, session: claimed.sessionId }),
+            body: JSON.stringify({
+              message: claimed.prompt,
+              session: claimed.sessionId,
+              botId,
+              bot: bot ? publicBot(bot) : { id: botId },
+            }),
           },
         ),
       );
@@ -872,6 +928,44 @@ export class Mesh extends DurableObject<MeshEnv> {
     this.routineBook = readRoutineBook(sql);
   }
 
+  private async loadBotBook() {
+    const raw = await this.ctx.storage.get<unknown>("bots");
+    this.botBook = importBotBook(raw);
+  }
+
+  private async saveBotBook() {
+    if (!this.botBook.dirty) return;
+    await this.ctx.storage.put("bots", exportBotBook(this.botBook));
+    this.botBook.dirty = false;
+  }
+
+  private noteTranscript(jobId: string, event: string, data: unknown) {
+    if (event !== "text" || !data || typeof data !== "object") return;
+    const delta = String((data as { delta?: unknown }).delta || "");
+    if (!delta) return;
+    this.liveTranscript.set(jobId, (this.liveTranscript.get(jobId) || "") + delta);
+  }
+
+  private finishLiveTranscript(store: MeshStore, jobId: string) {
+    const text = this.liveTranscript.get(jobId) || "";
+    this.liveTranscript.delete(jobId);
+    if (!text.trim()) return;
+    const job = store.getJob(jobId);
+    if (!job) return;
+    recordAssistantMessage(this.botBook, { sessionId: job.sessionId, text, now: Date.now() });
+  }
+
+  private async handleBots(request: Request): Promise<Response> {
+    const response = await this.withStore(() =>
+      handleBotsRequest({
+        book: this.botBook,
+        request,
+        now: Date.now(),
+      }),
+    );
+    return response || json({ error: "not found" }, { status: 404 });
+  }
+
   private saveRoutineBook() {
     const sql = this.storageSql();
     if (!sql || !this.routineBook.dirty) return;
@@ -883,9 +977,11 @@ export class Mesh extends DurableObject<MeshEnv> {
       const raw = await this.ctx.storage.get<MeshRecords>("mesh");
       const store = new MeshStore(raw || null);
       this.loadRoutineBook();
+      await this.loadBotBook();
       const result = await fn(store);
       await this.ctx.storage.put("mesh", store.snapshot());
       this.saveRoutineBook();
+      await this.saveBotBook();
       if (!(await this.ctx.storage.getAlarm())) {
         await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_MS);
       }
