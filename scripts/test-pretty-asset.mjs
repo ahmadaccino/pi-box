@@ -26,6 +26,12 @@ function mockAssets() {
           headers: { Location: "/vault" + url.search },
         });
       }
+      if (url.pathname === "/routines.html") {
+        return new Response(null, {
+          status: 307,
+          headers: { Location: "/routines" + url.search },
+        });
+      }
       if (url.pathname === "/plugins") {
         return new Response(
           "<!doctype html><title>pi-box plugins</title><h1>plugins</h1>",
@@ -35,6 +41,12 @@ function mockAssets() {
       if (url.pathname === "/vault") {
         return new Response(
           "<!doctype html><title>pi-box vault</title><h1>vault</h1>",
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.pathname === "/routines") {
+        return new Response(
+          "<!doctype html><title>pi-box routines</title><h1>routines</h1>",
           { headers: { "content-type": "text/html" } },
         );
       }
@@ -90,6 +102,22 @@ async function serve(path) {
   assert.ok(res);
   assert.equal(res.status, 200);
   assert.match(await res.text(), /pi-box vault/);
+}
+
+{
+  const { assets, res } = await serve("/routines");
+  assert.ok(res);
+  assert.equal(res.status, 200, "must not 307-loop back to /routines");
+  assert.match(await res.text(), /pi-box routines/);
+  assert.equal(assets.fetches[0].pathname, "/routines");
+  assert.equal(assets.fetches[0].redirect, "manual");
+}
+
+{
+  const { res } = await serve("/routines.html");
+  assert.ok(res);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /pi-box routines/);
 }
 
 {

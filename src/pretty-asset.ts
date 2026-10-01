@@ -1,6 +1,6 @@
 // Cloudflare Assets html_handling redirects /foo.html → /foo (307). A Worker
 // ASSETS.fetch("/foo.html") with run_worker_first therefore 307-loops on /foo.
-const PRETTY_PAGES = ["/plugins", "/vault"] as const;
+const PRETTY_PAGES = ["/plugins", "/vault", "/routines"] as const;
 
 export function prettyAssetPath(pathname: string): string | null {
   for (const page of PRETTY_PAGES) {

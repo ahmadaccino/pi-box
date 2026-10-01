@@ -16,6 +16,7 @@ import { handleSessionControl } from "./session-control.mjs";
 import { openLiveTurn } from "./live-turn.mjs";
 import { sealVaultKeyFromEnv } from "./vault.mjs";
 import { createAgentRuntime, hasProviderKey } from "./agent.mjs";
+import { handleRoutinesProxy, rememberRoutinesRoute } from "./routines-proxy.mjs";
 
 sealVaultKeyFromEnv();
 
@@ -67,6 +68,8 @@ function json(res, code, body) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  rememberRoutinesRoute(req);
+  if (await handleRoutinesProxy(req, res, url)) return;
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
     "Access-Control-Allow-Headers",

@@ -72,6 +72,10 @@ Create the bucket once:
 npx wrangler r2 bucket create pi-box-state
 ```
 
+## Routines
+
+Cron and webhook routines live in this Durable Object's SQLite table `routine_records`. The heartbeat alarm also claims due cron and places a fresh turn (online device that matches, otherwise cloud). See [routines.md](routines.md).
+
 ## Tests
 
 ```bash

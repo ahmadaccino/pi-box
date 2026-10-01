@@ -43,6 +43,19 @@ export function seedAgentDir(agentDir, env = process.env) {
     settings.defaultProvider = env.PI_PROVIDER || settings.defaultProvider;
   }
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  const notePath = path.join(agentDir, "AGENTS.md");
+  const routinesNote =
+    "\n\n## Routines\nWhen the user asks for something recurring — every day, each morning, on a schedule, or whenever an event arrives — propose a saved routine instead of only doing it once. Use the routines skill to create it (cron or webhook).\n";
+  let existing = "";
+  try {
+    existing = fs.readFileSync(notePath, "utf8");
+  } catch {
+    existing = "";
+  }
+  if (!existing.includes("## Routines")) {
+    const base = existing.trim() ? existing.replace(/\s*$/, "") : "# Agent";
+    fs.writeFileSync(notePath, base + routinesNote);
+  }
 }
 
 async function diskSessionManager(mod, sessionId, cwd, agentDir) {

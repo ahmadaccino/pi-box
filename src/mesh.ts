@@ -2,6 +2,20 @@ import { DurableObject } from "cloudflare:workers";
 import { getContainer } from "@cloudflare/containers";
 import { DEAD_AFTER_MS, HEARTBEAT_MS, annotateSkills, isLive, unionSkills, type SkillRow } from "./caps.ts";
 import { failSseBody, planChatTurn, sseChunk, waitingSseBody } from "./mesh-chat.ts";
+import {
+  RoutineBook,
+  appendRoutineTranscript,
+  assistantTextFromSse,
+  claimDueRoutines,
+  expireStaleRuns,
+  finishRoutineRun,
+  handleRoutinesRequest,
+  isRoutinesApiPath,
+  readRoutineBook,
+  soonestNextRun,
+  writeRoutineBook,
+  type ClaimedRun,
+} from "./routines.ts";
 import { handleMeshRequest, mintDeviceSecret } from "./mesh-http.ts";
 import { MeshStore, type MeshRecords } from "./mesh-state.ts";
 import { sanitizeSession } from "./password.ts";
@@ -26,12 +40,20 @@ type Pending = {
   deviceId: string;
 };
 
+type RoutineSql = {
+  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
+};
+
 export class Mesh extends DurableObject<MeshEnv> {
   pending = new Map<string, Pending>();
+  routineBook = new RoutineBook();
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    if (isRoutinesApiPath(path)) {
+      return this.handleRoutines(request);
+    }
     if (path === "/api/chat" && request.method === "POST") {
       return this.handleChat(request);
     }
@@ -41,17 +63,29 @@ export class Mesh extends DurableObject<MeshEnv> {
     if (/^\/api\/sessions\/[^/]+\/snapshot$/.test(path)) {
       return this.handleSessionSnapshot(request, path);
     }
-    return this.withStore((store) =>
+    const meshId = request.headers.get("x-pi-box-mesh") || "default";
+    const cloudRoutines: ClaimedRun[] = [];
+    const response = await this.withStore((store) =>
       handleMeshRequest({
         store,
         request,
-        meshId: request.headers.get("x-pi-box-mesh") || "default",
+        meshId,
         now: Date.now(),
         browser: Boolean(this.env.BROWSER),
         mintSecret: mintDeviceSecret,
         acceptWebSocket: (deviceId) => this.acceptDeviceSocket(deviceId),
-        onDeviceEvent: (jobId, event, data) => this.writePending(jobId, event, data),
+        onDeviceEvent: (jobId, event, data) => {
+          if (event === "text" && data && typeof data === "object") {
+            const delta = String((data as { delta?: unknown }).delta || "");
+            if (delta) appendRoutineTranscript(this.routineBook, jobId, delta);
+          }
+          return this.writePending(jobId, event, data);
+        },
         onDeviceAck: async (jobId, deviceId) => {
+          finishRoutineRun(this.routineBook, store, jobId, {
+            status: "succeeded",
+            now: Date.now(),
+          });
           await this.writePending(jobId, "status", { state: "pi", runtime: deviceId });
           await this.writePending(jobId, "done", { mock: false, runtime: deviceId });
           await this.closePending(jobId);
@@ -73,6 +107,20 @@ export class Mesh extends DurableObject<MeshEnv> {
           }
           if (next.decision.deviceId === "cloud") {
             await this.closePending(job.id);
+            const link = this.routineBook.jobs.get(job.id);
+            const routine = link ? this.routineBook.get(link.routineId) : undefined;
+            if (link && routine) {
+              const payload = (next.job.payload || {}) as { message?: string };
+              cloudRoutines.push({
+                routineId: link.routineId,
+                runId: link.runId,
+                sessionId: next.job.sessionId,
+                prompt: String(payload.message || routine.prompt),
+                jobId: job.id,
+                decision: next.decision,
+                job: next.job,
+              });
+            }
             return;
           }
           if (next.decision.deviceId) {
@@ -87,13 +135,23 @@ export class Mesh extends DurableObject<MeshEnv> {
         }),
       }),
     );
+    for (const run of cloudRoutines) this.defer(this.dispatchClaimed(run, meshId));
+    return response;
   }
 
   async alarm(): Promise<void> {
-    await this.withStore(async (store) => {
-      store.sweep(Date.now());
+    const now = Date.now();
+    const claimed = await this.withStore((store) => {
+      store.sweep(now);
+      expireStaleRuns(this.routineBook, store, now);
+      return claimDueRoutines(this.routineBook, store, now);
     });
-    await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_MS);
+    const meshId = this.routineBook.settings.meshId || "default";
+    for (const run of claimed) this.defer(this.dispatchClaimed(run, meshId));
+    const nextAt = await this.withStore(() => soonestNextRun(this.routineBook, Date.now()));
+    const delay =
+      nextAt == null ? HEARTBEAT_MS : Math.min(HEARTBEAT_MS, Math.max(1_000, nextAt - Date.now()));
+    await this.ctx.storage.setAlarm(Date.now() + delay);
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
@@ -119,12 +177,26 @@ export class Mesh extends DurableObject<MeshEnv> {
       return;
     }
     if (parsed.type === "event" && parsed.jobId) {
-      await this.writePending(parsed.jobId, parsed.event || "message", parsed.data);
+      const jobId = parsed.jobId;
+      if (parsed.event === "text") {
+        const delta =
+          parsed.data && typeof parsed.data === "object"
+            ? String((parsed.data as { delta?: unknown }).delta || "")
+            : "";
+        if (delta) {
+          await this.withStore(() => appendRoutineTranscript(this.routineBook, jobId, delta));
+        }
+      }
+      await this.writePending(jobId, parsed.event || "message", parsed.data);
       return;
     }
     if (parsed.type === "ack" && parsed.jobId) {
       await this.withStore((store) => {
         store.ack({ jobId: parsed.jobId as string, deviceId, now: Date.now() });
+        finishRoutineRun(this.routineBook, store, parsed.jobId as string, {
+          status: "succeeded",
+          now: Date.now(),
+        });
       });
       await this.writePending(parsed.jobId, "status", { state: "pi", runtime: deviceId });
       await this.writePending(parsed.jobId, "done", { mock: false, runtime: deviceId });
@@ -191,16 +263,17 @@ export class Mesh extends DurableObject<MeshEnv> {
         body.session,
     );
     const meshId = request.headers.get("x-pi-box-mesh") || "default";
-    const planned = await this.withStore((store) =>
-      planChatTurn(store, {
+    const planned = await this.withStore((store) => {
+      this.routineBook.rememberSession(sessionId);
+      return planChatTurn(store, {
         sessionId,
         message: body.message,
         require: body.require,
         now: Date.now(),
         browser: Boolean(this.env.BROWSER),
         payload: { message: body.message, raw, sessionId },
-      }),
-    );
+      });
+    });
     const { job, decision } = planned;
     if (decision.wait) {
       return sseResponse(waitingSseBody(job), { runtime: "waiting" });
@@ -216,9 +289,12 @@ export class Mesh extends DurableObject<MeshEnv> {
         return sseResponse(failSseBody("snapshot restore failed"), { runtime: "cloud" });
       }
       const container = getContainer(this.env.PI_BOX, meshId);
+      const headers = new Headers(request.headers);
+      headers.set("x-pi-box-mesh", meshId);
+      headers.set("x-pi-box-origin", new URL(request.url).origin);
       const forwarded = new Request(request.url, {
         method: "POST",
-        headers: request.headers,
+        headers,
         body: raw,
       });
       const res = await container.fetch(forwarded);
@@ -481,12 +557,136 @@ export class Mesh extends DurableObject<MeshEnv> {
     return tags[0] || "";
   }
 
+  private async handleRoutines(request: Request): Promise<Response> {
+    const meshId = request.headers.get("x-pi-box-mesh") || "default";
+    const origin = new URL(request.url).origin;
+    const claimed: ClaimedRun[] = [];
+    const response = await this.withStore((store) => {
+      if (this.routineBook.settings.meshId !== meshId) {
+        this.routineBook.settings.meshId = meshId;
+        this.routineBook.dirty = true;
+      }
+      return handleRoutinesRequest({
+        book: this.routineBook,
+        store,
+        request,
+        meshId,
+        now: Date.now(),
+        origin,
+        onClaim: (run) => claimed.push(run),
+      });
+    });
+    for (const run of claimed) this.defer(this.dispatchClaimed(run, meshId));
+    return response || json({ error: "not found" }, { status: 404 });
+  }
+
+  private defer(task: Promise<unknown>) {
+    const tracked = task.catch((err) => {
+      console.error("[pi-box] routine dispatch failed", err);
+    });
+    const ctx = this.ctx as { waitUntil?: (promise: Promise<unknown>) => void };
+    if (typeof ctx.waitUntil === "function") ctx.waitUntil(tracked);
+    else void tracked;
+  }
+
+  private async dispatchClaimed(claimed: ClaimedRun, meshId: string) {
+    const decision = claimed.decision;
+    if (decision.wait || decision.fail || !decision.deviceId) {
+      await this.withStore((store) => {
+        store.fail(claimed.jobId);
+        finishRoutineRun(this.routineBook, store, claimed.jobId, {
+          status: decision.wait ? "waiting" : "failed",
+          error: decision.wait ? "waiting for a matching machine" : "no_capacity",
+          now: Date.now(),
+        });
+      });
+      return;
+    }
+    if (decision.deviceId !== "cloud") {
+      this.sendJob(decision.deviceId, claimed.job, meshId);
+      return;
+    }
+    const restored = await this.restoreRuntime(meshId, claimed.sessionId, "cloud");
+    if (!restored.ok) {
+      await this.withStore((store) => {
+        store.fail(claimed.jobId, "cloud");
+        finishRoutineRun(this.routineBook, store, claimed.jobId, {
+          status: "failed",
+          error: "snapshot restore failed",
+          now: Date.now(),
+        });
+      });
+      return;
+    }
+    try {
+      const container = getContainer(this.env.PI_BOX, meshId);
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        "x-pi-box-session": claimed.sessionId,
+        "x-pi-box-mesh": meshId,
+      };
+      if (this.env.GATEWAY_TOKEN) headers["x-pi-box-internal"] = this.env.GATEWAY_TOKEN;
+      const res = await container.fetch(
+        new Request(
+          `http://sidecar/api/chat?session=${encodeURIComponent(claimed.sessionId)}`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ message: claimed.prompt, session: claimed.sessionId }),
+          },
+        ),
+      );
+      const text = await res.text();
+      const assistant = assistantTextFromSse(text);
+      const failed = !res.ok || /(^|\n)event:\s*error/.test(text);
+      await this.withStore((store) => {
+        if (failed) store.fail(claimed.jobId, "cloud");
+        else store.ack({ jobId: claimed.jobId, deviceId: "cloud", now: Date.now() });
+        finishRoutineRun(this.routineBook, store, claimed.jobId, {
+          status: failed ? "failed" : "succeeded",
+          result: assistant,
+          error: failed ? "run failed" : "",
+          now: Date.now(),
+        });
+      });
+      if (!failed) await this.captureFromCloud(meshId, claimed.sessionId);
+    } catch (err) {
+      await this.withStore((store) => {
+        store.fail(claimed.jobId, "cloud");
+        finishRoutineRun(this.routineBook, store, claimed.jobId, {
+          status: "failed",
+          error: err instanceof Error ? err.message : "cloud run failed",
+          now: Date.now(),
+        });
+      });
+    }
+  }
+
+  private storageSql(): RoutineSql | null {
+    const storage = this.ctx.storage as { sql?: RoutineSql };
+    return storage.sql || null;
+  }
+
+  private loadRoutineBook() {
+    const sql = this.storageSql();
+    if (!sql) return;
+    this.routineBook = readRoutineBook(sql);
+  }
+
+  private saveRoutineBook() {
+    const sql = this.storageSql();
+    if (!sql || !this.routineBook.dirty) return;
+    writeRoutineBook(sql, this.routineBook);
+  }
+
   private async withStore<T>(fn: (store: MeshStore) => Promise<T> | T): Promise<T> {
     return this.ctx.blockConcurrencyWhile(async () => {
       const raw = await this.ctx.storage.get<MeshRecords>("mesh");
       const store = new MeshStore(raw || null);
+      this.loadRoutineBook();
       const result = await fn(store);
       await this.ctx.storage.put("mesh", store.snapshot());
+      this.saveRoutineBook();
       if (!(await this.ctx.storage.getAlarm())) {
         await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_MS);
       }

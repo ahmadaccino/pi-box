@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "routines",
+  "description": "Saved prompts that run on a schedule or from a webhook while you are away.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": { "name": "pi-box" }
+}
