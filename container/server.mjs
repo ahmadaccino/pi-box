@@ -10,8 +10,15 @@ import { handleBrowserHttp, browserPublicStatus } from "./browser.mjs";
 import { handlePluginsHttp } from "./plugins.mjs";
 import { handleSnapshotHttp } from "./snapshot.mjs";
 import { handleGoogleOAuthHttp } from "./google-oauth.mjs";
+import { handleApprovalsHttp } from "./approvals.mjs";
+import { handleOutboxHttp } from "./outbox.mjs";
+import { handleSessionControl } from "./session-control.mjs";
+import { openLiveTurn } from "./live-turn.mjs";
+import { sealVaultKeyFromEnv } from "./vault.mjs";
 import { createAgentRuntime, hasProviderKey } from "./agent.mjs";
 import { handleRoutinesProxy, rememberRoutinesRoute } from "./routines-proxy.mjs";
+
+sealVaultKeyFromEnv();
 
 const PORT = Number(process.env.PORT || 8788);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -76,6 +83,9 @@ const server = http.createServer(async (req, res) => {
 
   if (await handleSnapshotHttp(req, res, url)) return;
   if (await handleGoogleOAuthHttp(req, res, url)) return;
+  if (await handleApprovalsHttp(req, res, url)) return;
+  if (await handleOutboxHttp(req, res, url)) return;
+  if (await handleSessionControl(req, res, url, runtime)) return;
   if (VAULT_ROUTES && (await handleVaultHttp(req, res, url))) return;
   if (await handlePluginsHttp(req, res, url)) return;
   if (await handleBrowserHttp(req, res, url)) return;
@@ -144,6 +154,10 @@ const server = http.createServer(async (req, res) => {
       "x-pi-box-session": String(sessionId),
     });
 
+    const turn = openLiveTurn(String(sessionId), (event, data) => sseWrite(res, event, data));
+    // Response close covers the client hanging up. Request close also fires
+    // once the POST body is read, which is still during the turn.
+    res.on("close", () => turn.disconnect());
     try {
       await runtime.runTurn({
         sessionId: String(sessionId),
@@ -154,6 +168,8 @@ const server = http.createServer(async (req, res) => {
       console.error("[pi-box] chat failed", err);
       sseWrite(res, "error", { message: err?.message || String(err) });
       sseWrite(res, "done", { error: true });
+    } finally {
+      turn.close();
     }
     res.end();
     return;

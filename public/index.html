@@ -61,12 +61,13 @@
         <main id="log"></main>
         <form id="composer">
           <textarea id="input" rows="1" placeholder="Message this box…"></textarea>
+          <button type="button" id="stop" hidden>Stop</button>
           <button type="submit" id="send">Send</button>
         </form>
       </section>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"></script>
     <script src="/computer.js"></script>
-    <script src="/app.js"></script>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

@@ -5,6 +5,10 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { classifyPluginCall, publishApproval } from "./actions.mjs";
+import { getApprovalGate } from "./approvals.mjs";
+import { emitLive } from "./live-turn.mjs";
+import { fileDraft, setOutboxSender } from "./outbox.mjs";
 import { createSetupToken } from "./vault.mjs";
 import {
   getOAuthToken,
@@ -255,8 +259,8 @@ const HOP = new Set([
   "x-pi-box-internal",
 ]);
 
-export async function proxyPluginRequest(pluginId, req) {
-  const packs = await loadPluginPacks();
+async function executeProxy(pluginId, req, ctx = {}) {
+  const packs = ctx.packs || (await loadPluginPacks());
   const pack = packs.find((p) => p.id === pluginId);
   if (!pack && !DEFAULT_ALLOWLIST[pluginId]) {
     return { status: 404, body: { error: "unknown plugin" } };
@@ -300,12 +304,13 @@ export async function proxyPluginRequest(pluginId, req) {
       headers["content-type"] = "application/json";
     }
   }
-  let res = await fetch(dest, init);
+  const doFetch = ctx.fetch || fetch;
+  let res = await doFetch(dest, init);
   if (res.status === 401 && GOOGLE_PLUGINS.includes(pluginId) && auth.secrets) {
     try {
       const next = await refreshGoogleAccessToken(pluginId, auth.secrets);
       headers.authorization = `Bearer ${next.access_token}`;
-      res = await fetch(target, init);
+      res = await doFetch(target, init);
     } catch {
       return { status: 401, body: { error: "authenticate", code: "refresh-failed" } };
     }
@@ -322,6 +327,132 @@ export async function proxyPluginRequest(pluginId, req) {
     body: { ok: res.ok, status: res.status, data: parsed },
   };
 }
+
+function emitCard(ctx, card) {
+  const emit = ctx.emit || ((event, data) => emitLive(event, data));
+  try {
+    emit("card", card);
+  } catch {
+    /* the chat stream may already be gone */
+  }
+}
+
+async function holdGmail(pluginId, outbound, req, ctx) {
+  let gmailDraftId = "";
+  if (outbound.holdSend) {
+    if (!outbound.raw) {
+      return {
+        status: 400,
+        body: { error: "gmail send requires a raw message", sent: false, draft: false },
+      };
+    }
+    const created = await executeProxy(
+      pluginId,
+      {
+        url: "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+        method: "POST",
+        body: { message: { raw: outbound.raw } },
+      },
+      ctx,
+    );
+    if (!created.body?.ok) {
+      return {
+        ...created,
+        body: {
+          ...created.body,
+          sent: false,
+          draft: false,
+          message:
+            "Nothing was sent. Draft creation failed. If Gmail returned 403, reconnect so the grant includes gmail.compose.",
+        },
+      };
+    }
+    gmailDraftId = created.body?.data?.id || "";
+  } else {
+    const created = await executeProxy(pluginId, req, ctx);
+    if (!created.body?.ok) {
+      return { ...created, body: { ...created.body, sent: false, draft: false } };
+    }
+    gmailDraftId = created.body?.data?.id || "";
+  }
+  const filed = fileDraft({ ...outbound, gmailDraftId, fetchImpl: ctx.fetch || null });
+  emitCard(ctx, filed.card);
+  return { status: 200, body: filed.model };
+}
+
+async function holdTelegram(outbound, ctx) {
+  const filed = fileDraft({ ...outbound, fetchImpl: ctx.fetch || null });
+  emitCard(ctx, filed.card);
+  return { status: 200, body: filed.model };
+}
+
+export async function proxyPluginRequest(pluginId, req, ctx = {}) {
+  const classified = classifyPluginCall(pluginId, req);
+  if (!ctx.userAction && classified.kind === "outbound") {
+    const packs = ctx.packs || (await loadPluginPacks());
+    const target = String(req?.url || req?.href || "");
+    if (!isProxyUrlAllowed(pluginId, target, packs)) {
+      return { status: 403, body: { error: "url not allowlisted" } };
+    }
+    const auth = await bearerFor(pluginId);
+    if (!auth || auth.error) {
+      return { status: 401, body: { error: "authenticate", code: auth?.error || "no-token" } };
+    }
+    if (classified.outbound.channel === "gmail") return holdGmail(pluginId, classified.outbound, req, ctx);
+    if (classified.outbound.channel === "telegram") return holdTelegram(classified.outbound, ctx);
+  }
+  if (!ctx.userAction && classified.kind === "mutation") {
+    const gate = ctx.gate || getApprovalGate();
+    const decision = await gate.decide(classified.approval);
+    if (decision.decision !== "allow") {
+      return {
+        status: 403,
+        body: {
+          error: "denied",
+          decision: decision.decision,
+          via: decision.via,
+          summary: classified.approval.summary,
+        },
+      };
+    }
+  }
+  return executeProxy(pluginId, req, ctx);
+}
+
+setOutboxSender(async (row, op) => {
+  const ctx = { userAction: true, fetch: row.fetchImpl || undefined };
+  if (op === "discard") {
+    if (row.channel === "gmail" && row.gmailDraftId) {
+      return executeProxy(
+        "gmail",
+        {
+          url: `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(row.gmailDraftId)}`,
+          method: "DELETE",
+        },
+        ctx,
+      );
+    }
+    return { status: 200, body: { ok: true, discarded: true, sent: false } };
+  }
+  if (row.channel === "gmail") {
+    const upstream = row.gmailDraftId
+      ? {
+          url: "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send",
+          method: "POST",
+          body: { id: row.gmailDraftId },
+        }
+      : {
+          url: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+          method: "POST",
+          body: { raw: row.raw },
+        };
+    return executeProxy("gmail", upstream, ctx);
+  }
+  if (row.channel === "telegram" && row.request) {
+    return executeProxy("telegram", row.request, ctx);
+  }
+  return { status: 400, body: { error: "unknown draft", sent: false } };
+});
 
 function json(res, code, body) {
   res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
@@ -394,6 +525,11 @@ export async function handlePluginsHttp(req, res, url) {
         body = await readBody(req);
       } catch {
         json(res, 400, { error: "invalid json" });
+        return true;
+      }
+      const decision = await getApprovalGate().decide(publishApproval(body || {}));
+      if (decision.decision !== "allow") {
+        json(res, 403, { error: "denied", decision: decision.decision, via: decision.via });
         return true;
       }
       const out = await publishSite(body || {});

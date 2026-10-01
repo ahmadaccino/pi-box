@@ -1,3 +1,5 @@
+import { composerAction, composerView } from "./turn-control.js";
+
 const gate = document.getElementById("gate");
 const app = document.getElementById("app");
 const roster = document.getElementById("roster");
@@ -6,6 +8,7 @@ const log = document.getElementById("log");
 const form = document.getElementById("composer");
 const input = document.getElementById("input");
 const send = document.getElementById("send");
+const stop = document.getElementById("stop");
 const statusEl = document.getElementById("status");
 const boxName = document.getElementById("box-name");
 const boxMeta = document.getElementById("box-meta");
@@ -25,6 +28,7 @@ let current = null;
 let chatSession = localStorage.getItem("pi-box-chat") || crypto.randomUUID();
 let computerSessionId = null;
 let computerTimer = null;
+let turnLive = false;
 
 localStorage.setItem("pi-box-chat", chatSession);
 
@@ -97,6 +101,16 @@ async function authHeader() {
   if (!clerk?.session) return {};
   const token = await clerk.session.getToken();
   return token ? { authorization: `Bearer ${token}` } : {};
+}
+
+function applyComposer() {
+  const view = composerView(turnLive);
+  if (input) input.placeholder = view.placeholder;
+  if (send) {
+    send.textContent = view.sendLabel;
+    send.disabled = view.sendDisabled;
+  }
+  if (stop) stop.hidden = view.stopHidden;
 }
 
 function setStatus(text, cls) {
@@ -310,15 +324,101 @@ function addAssistant() {
       }
       log.scrollTop = log.scrollHeight;
     },
+    approval(payload) {
+      wrap.insertBefore(approvalCard(payload), bubble);
+      log.scrollTop = log.scrollHeight;
+    },
+    card(payload) {
+      wrap.insertBefore(draftCard(payload), bubble);
+      log.scrollTop = log.scrollHeight;
+    },
   };
+}
+
+function cardShell(title) {
+  const card = el("div", "card");
+  card.append(el("div", "card-title", title));
+  return card;
+}
+
+function approvalCard(payload) {
+  const card = cardShell("Approval needed");
+  card.classList.add("approval");
+  card.append(el("p", "card-summary", payload.summary || `${payload.tool || "tool"} ${payload.target || ""}`));
+  const row = el("div", "card-actions");
+  const choices = [
+    ["allow_once", "Allow once"],
+    ["always", "Always allow"],
+    ["deny", "Deny"],
+  ];
+  for (const [decision, label] of choices) {
+    const btn = el("button", decision === "deny" ? "ghost" : "", label);
+    btn.type = "button";
+    btn.addEventListener("click", async () => {
+      for (const child of row.querySelectorAll("button")) child.disabled = true;
+      try {
+        await fetch(`/api/approvals/${encodeURIComponent(payload.id)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(await authHeader()) },
+          body: JSON.stringify({ decision }),
+        });
+        card.append(el("p", "card-result", label));
+      } catch (err) {
+        card.append(el("p", "card-result", String(err)));
+      }
+    });
+    row.append(btn);
+  }
+  card.append(row);
+  return card;
+}
+
+function draftCard(payload) {
+  const card = cardShell(payload.title || "Ready to send");
+  card.classList.add("draft");
+  const who = [payload.to, payload.cc].filter(Boolean).join(", ");
+  if (payload.channel === "telegram") {
+    card.append(el("p", "card-line", `Telegram ${payload.chatId || ""}`.trim()));
+  } else if (who) {
+    card.append(el("p", "card-line", who));
+  }
+  if (payload.subject) card.append(el("p", "card-subject", payload.subject));
+  card.append(el("pre", "card-body", payload.body || ""));
+  const row = el("div", "card-actions");
+  const sendBtn = el("button", "", "Send");
+  const discardBtn = el("button", "ghost", "Discard");
+  sendBtn.type = "button";
+  discardBtn.type = "button";
+  const act = async (op) => {
+    sendBtn.disabled = true;
+    discardBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/outbox/${encodeURIComponent(payload.id)}/${op}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(await authHeader()) },
+        body: JSON.stringify({ nonce: payload.nonce }),
+      });
+      const data = await res.json().catch(() => ({}));
+      const label = op === "send" ? (data.sent ? "Sent" : "Send failed") : "Discarded";
+      card.append(el("p", "card-result", label));
+    } catch (err) {
+      card.append(el("p", "card-result", String(err)));
+    }
+  };
+  sendBtn.addEventListener("click", () => act("send"));
+  discardBtn.addEventListener("click", () => act("discard"));
+  row.append(sendBtn, discardBtn);
+  card.append(row);
+  return card;
 }
 
 async function chat(message) {
   if (!current) return;
   addUser(message);
   const asst = addAssistant();
+  turnLive = true;
+  applyComposer();
   setStatus("running", "live");
-  send.disabled = true;
   try {
     const headers = {
       "content-type": "application/json",
@@ -362,6 +462,8 @@ async function chat(message) {
         }
         if (event === "text" && payload.delta) asst.append(payload.delta);
         else if (event === "tool") asst.tool(payload);
+        else if (event === "approval") asst.approval(payload);
+        else if (event === "card") asst.card(payload);
         else if (event === "status" && payload.state === "mock") setStatus("mock", "live");
         else if (event === "status" && payload.state === "waiting") {
           setStatus("waiting", "live");
@@ -382,18 +484,58 @@ async function chat(message) {
     asst.append(String(err));
     setStatus("error", "err");
   } finally {
-    send.disabled = false;
+    turnLive = false;
+    applyComposer();
     input.focus();
+  }
+}
+
+async function steerTurn(message) {
+  addUser(message);
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(chatSession)}/steer`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-pi-box-session": chatSession,
+        ...(await authHeader()),
+      },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setStatus(data.error === "idle" ? "idle" : "error", data.error === "idle" ? "" : "err");
+    }
+  } catch (err) {
+    setStatus("error", "err");
+    console.error(err);
+  }
+}
+
+async function stopTurn() {
+  if (!turnLive) return;
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(chatSession)}/abort`, {
+      method: "POST",
+      headers: await authHeader(),
+    });
+    setStatus("stopping", "live");
+  } catch (err) {
+    setStatus("error", "err");
+    console.error(err);
   }
 }
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  const message = input.value.trim();
-  if (!message) return;
+  const action = composerAction(turnLive, input.value);
+  if (action.type === "ignore") return;
   input.value = "";
-  chat(message);
+  if (action.type === "steer") steerTurn(action.message);
+  else chat(action.message);
 });
+if (stop) stop.addEventListener("click", () => stopTurn());
+applyComposer();
 input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();

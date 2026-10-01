@@ -34,6 +34,7 @@
   ],
   "browser": { "binding": "BROWSER" },
   "vars": {
-    "CLERK_PUBLISHABLE_KEY": ""
+    "CLERK_PUBLISHABLE_KEY": "",
+    "PI_BOX_PUBLIC_URL": "https://pi-box.ahmad-096.workers.dev"
   }
 }

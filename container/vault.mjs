@@ -29,6 +29,21 @@ const MAX_BODY = 64 * 1024;
 const MAX_FIELD = 512;
 
 let warnedLocalKey = false;
+/** undefined = still read process.env. string = captured, including "". */
+let heldVaultKey;
+
+export function sealVaultKeyFromEnv(env = process.env) {
+  const raw = (env.VAULT_ENCRYPTION_KEY || "").trim();
+  if (heldVaultKey === undefined || (raw && !heldVaultKey)) {
+    heldVaultKey = raw;
+  }
+  delete env.VAULT_ENCRYPTION_KEY;
+}
+
+export function resetVaultKeyForTests() {
+  heldVaultKey = undefined;
+  warnedLocalKey = false;
+}
 
 function vaultRoot() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || "/root/.pi/agent";
@@ -48,7 +63,10 @@ function oauthFile() {
 }
 
 export function loadEncryptionKey() {
-  const raw = (process.env.VAULT_ENCRYPTION_KEY || "").trim();
+  const raw =
+    heldVaultKey !== undefined
+      ? heldVaultKey
+      : (process.env.VAULT_ENCRYPTION_KEY || "").trim();
   if (!raw) {
     const key = Buffer.from(LOCAL_DEV_NOT_FOR_PRODUCTION_KEY_B64, "base64");
     if (!warnedLocalKey) {

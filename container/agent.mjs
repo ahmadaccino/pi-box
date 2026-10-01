@@ -7,6 +7,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadSkills, annotateAvailability, toPiSkills } from "./skills.mjs";
 import { detectCapabilities } from "./host.mjs";
+import { bashSpawnHook } from "./shell-env.mjs";
+import { attachToolGate, getApprovalGate } from "./approvals.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -80,6 +82,11 @@ async function diskSessionManager(mod, sessionId, cwd, agentDir) {
   } catch {
     return mod.SessionManager.inMemory(cwd);
   }
+}
+
+export function piBashCustomTool(mod, cwd) {
+  if (!mod || typeof mod.createBashToolDefinition !== "function") return null;
+  return mod.createBashToolDefinition(cwd, { spawnHook: bashSpawnHook });
 }
 
 export function createAgentRuntime(opts = {}) {
@@ -156,6 +163,7 @@ export function createAgentRuntime(opts = {}) {
       }),
     });
     await loader.reload();
+    const bashTool = piBashCustomTool(mod, cwd);
     const { session } = await mod.createAgentSession({
       cwd,
       agentDir,
@@ -165,13 +173,15 @@ export function createAgentRuntime(opts = {}) {
       model: resolved.model,
       thinkingLevel: resolved.thinkingLevel || "medium",
       tools: ["read", "bash", "edit", "write", "ls", "grep", "find"],
+      ...(bashTool ? { customTools: [bashTool] } : {}),
     });
-    const wrapped = { kind: "pi", id, session };
+    attachToolGate(session, opts.gate || getApprovalGate());
+    const wrapped = { kind: "pi", id, session, running: false, aborted: false };
     sessions.set(id, wrapped);
     return wrapped;
   }
 
-  async function runMock(emit, message) {
+  async function runMock(wrapped, emit, message) {
     emit("status", { state: "mock", reason: piLoadError ? "sdk" : "no-api-key" });
     const live = catalog.filter((s) => s.available).map((s) => s.name);
     emit("tool", {
@@ -195,11 +205,15 @@ export function createAgentRuntime(opts = {}) {
       `Unavailable: ${catalog.filter((s) => !s.available).map((s) => s.name).join(", ") || "none"}.\n\n` +
       `Set OPENROUTER_API_KEY (or ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY) and restart for a real Pi loop.`;
     for (const chunk of text.split(/(\s+)/)) {
+      if (wrapped.aborted) {
+        emit("status", { state: "aborted" });
+        break;
+      }
       if (!chunk) continue;
       emit("text", { delta: chunk });
       await new Promise((r) => setTimeout(r, 8));
     }
-    emit("done", { mock: true });
+    emit("done", { mock: true, aborted: Boolean(wrapped.aborted) });
   }
 
   async function runPi(wrapped, emit, message) {
@@ -249,8 +263,45 @@ export function createAgentRuntime(opts = {}) {
   async function runTurn({ sessionId, message, emit }) {
     if (!capabilities) await refreshCatalog();
     const wrapped = await getSession(String(sessionId));
-    if (wrapped.kind === "mock") await runMock(emit, message);
-    else await runPi(wrapped, emit, message);
+    wrapped.running = true;
+    wrapped.aborted = false;
+    wrapped.emit = emit;
+    try {
+      if (wrapped.kind === "mock") await runMock(wrapped, emit, message);
+      else await runPi(wrapped, emit, message);
+    } finally {
+      wrapped.running = false;
+      wrapped.emit = null;
+    }
+  }
+
+  async function steer(sessionId, message) {
+    const text = String(message || "").trim();
+    if (!text) return { ok: false, error: "message required" };
+    const wrapped = sessions.get(String(sessionId));
+    if (!wrapped?.running) return { ok: false, error: "idle" };
+    if (wrapped.kind === "pi" && typeof wrapped.session?.steer === "function") {
+      await wrapped.session.steer(text);
+      return { ok: true, steered: true };
+    }
+    wrapped.steers = wrapped.steers || [];
+    wrapped.steers.push(text);
+    try {
+      wrapped.emit?.("text", { delta: `\n[steer] ${text}\n` });
+    } catch {
+      /* stream closed */
+    }
+    return { ok: true, steered: true, mock: true };
+  }
+
+  async function abort(sessionId) {
+    const wrapped = sessions.get(String(sessionId));
+    if (!wrapped) return { ok: true, idle: true };
+    wrapped.aborted = true;
+    if (wrapped.kind === "pi" && typeof wrapped.session?.abort === "function") {
+      await wrapped.session.abort();
+    }
+    return { ok: true };
   }
 
   return {
@@ -259,6 +310,8 @@ export function createAgentRuntime(opts = {}) {
     loadPi,
     getSession,
     runTurn,
+    steer,
+    abort,
     catalog: () => catalog,
     capabilities: () => capabilities,
     piLoadError: () => piLoadError,

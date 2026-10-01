@@ -48,6 +48,16 @@ Real browser sessions (Playwright locally, Cloudflare Browser Rendering in the c
 
 Web UI: left roster of chats, machines pane in the aside, thread on the right. Clerk if `CLERK_SECRET_KEY` is set; local mock skips auth. Mesh placement is documented in [docs/mesh.md](docs/mesh.md).
 
+While a turn is running the composer stays enabled. A new message is delivered with Pi `steer` (the button reads Steer) instead of starting another turn. Stop calls Pi `abort` on that session.
+
+## Safe actions
+
+Shell commands the model runs cannot see sidecar secrets. Pi's bash tool copies `process.env`; a `spawnHook` strips `VAULT_ENCRYPTION_KEY`, provider keys, `GOOGLE_CLIENT_SECRET`, `BROWSER_CDP_TOKEN`, `CLOUDFLARE_API_TOKEN`, and `GATEWAY_TOKEN` before the child starts. The sidecar also reads the vault key once at startup and deletes it from `process.env`. Details: [docs/vault.md](docs/vault.md).
+
+Plugin calls that mutate outside data (delete, publish/deploy, calendar writes, payments) block on an approval card: **Allow once**, **Always allow** (saved per tool and target in the agent dir), or **Deny**. If nobody is connected to the chat stream, the request expires after 10 minutes and counts as Deny.
+
+Gmail and Telegram outgoing messages are drafts. The chat shows a **Ready to send** card (recipients, subject, body). Send runs only when the user clicks Send. Discard drops it. The model cannot send by calling the Gmail send API or `sendMessage` itself.
+
 ## Join a machine
 
 Login (existing password page and/or Clerk) is the pairing. Then a device token.
@@ -103,7 +113,7 @@ Also set `CLERK_PUBLISHABLE_KEY` in `wrangler.jsonc` `vars` (it is public).
 
 ## Google OAuth (Gmail + Calendar)
 
-When `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set, Authenticate on `/plugins` starts Google OAuth (`openid email gmail.readonly gmail.send calendar.events`, `access_type=offline`, `prompt=consent`). One grant upserts **both** gmail and google-calendar into the vault. If those env vars are unset, Authenticate falls back to a vault setup URL (paste token).
+When `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set, Authenticate on `/plugins` starts Google OAuth (`openid email gmail.readonly gmail.compose gmail.send calendar.events`, `access_type=offline`, `prompt=consent`). `gmail.compose` files drafts; `gmail.send` is used only after the user clicks Send. One grant upserts **both** gmail and google-calendar into the vault. If those env vars are unset, Authenticate falls back to a vault setup URL (paste token).
 
 ```bash
 npx wrangler secret put GOOGLE_CLIENT_ID
